@@ -29,7 +29,7 @@ Patent data is the most fragmented public dataset on the planet. Every national 
 | WIPO PatentScope | WO / PCT international | No (scraped) |
 | IP Australia | AU patents | No (REST API) |
 | CIPO | Canadian patents | No (scraped) |
-| Google Patents | All jurisdictions | No (Playwright) |
+| Google Patents | All jurisdictions | No |
 | Google BigQuery | Bulk patent data | Yes (GCP credentials) |
 | Web search fallback | Anything missed | No (DuckDuckGo) / Optional (SerpAPI) |
 
@@ -207,6 +207,12 @@ All config via autoloaded env files, `~/.patents.toml`, or environment variables
 # Rust tests (74 tests, <0.1s)
 cargo test --manifest-path src/rust/Cargo.toml
 
+# Direct stdio MCP smoke test against the Rust dev server
+just mcp-smoke-rust
+
+# Direct stdio MCP smoke test against the installed Rust binary
+just mcp-smoke-rust-installed
+
 # Fast Python unit tests (<1s, all I/O mocked)
 pytest tests/python/ -m "not browser and not integration and not slow"
 
@@ -240,7 +246,7 @@ src/
       fetchers/
         http/              #   9 native async HTTP sources with retry
         web_search/        #   DuckDuckGo + SerpAPI fallback
-        browser.rs         #   Playwright-based Google Patents scraper
+        browser.rs         #   Native Google Patents HTML/microdata fetcher
         mod.rs             #   Priority-ordered source orchestrator
       server/              #   JSON-RPC 2.0 over stdin/stdout
 tests/
@@ -254,6 +260,23 @@ docs/
 ## What makes this different
 
 Most patent tools give you an API wrapper for one database. This gives your agent the entire global patent system behind a single function call. It handles the authentication, the format differences, the fallbacks, the caching, and the PDF-to-text conversion. Your agent asks for a patent and gets back something it can read. That's it. That's the product.
+
+## MCP Debugging
+
+If your editor or MCP client seems to be using a stale server process, test the Rust server directly over stdio JSON-RPC instead of guessing whether the client reloaded:
+
+```bash
+# Current checkout / dev binary
+just mcp-smoke-rust
+
+# Installed binary from ~/.cargo/bin
+just mcp-smoke-rust-installed
+
+# Different patent
+just mcp-smoke-rust US7654321B2
+```
+
+These recipes send `initialize` and `tools/call` requests straight to the server process, so they verify the real binary behavior without depending on Claude/OpenCode reload state.
 
 ## License
 

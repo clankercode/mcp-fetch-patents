@@ -1,4 +1,5 @@
 """HTTP/API patent sources: PPUBS, EPO OPS, BigQuery, Espacenet, WIPO, etc."""
+
 from __future__ import annotations
 
 import logging
@@ -25,10 +26,22 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 patent-mcp-server/0.1"
+)
+
+
+def _client_kwargs(**kwargs: Any) -> dict[str, Any]:
+    headers = dict(kwargs.pop("headers", {}))
+    headers.setdefault("User-Agent", DEFAULT_USER_AGENT)
+    return {**kwargs, "headers": headers}
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _is_retryable(exc: BaseException) -> bool:
     """Retry on 429/5xx HTTP errors and network timeouts."""
@@ -56,6 +69,7 @@ def _now_iso() -> str:
 # PPUBS session manager
 # ---------------------------------------------------------------------------
 
+
 class PpubsSessionManager:
     """Manages PPUBS session token (in-memory cache, TTL=30min)."""
 
@@ -79,11 +93,15 @@ class PpubsSessionManager:
     async def _establish_session(self) -> str | None:
         url = f"{self._base}/ppubs-api/v1/session"
         try:
-            async with httpx.AsyncClient(http2=True, timeout=30) as client:
+            async with httpx.AsyncClient(
+                **_client_kwargs(http2=True, timeout=30)
+            ) as client:
                 resp = await client.post(url, json={})
                 resp.raise_for_status()
                 data = resp.json()
-                return data.get("session") or data.get("token") or data.get("accessToken")
+                return (
+                    data.get("session") or data.get("token") or data.get("accessToken")
+                )
         except Exception as e:
             log.warning("PPUBS session establishment failed: %s", e)
             return None
@@ -93,10 +111,13 @@ class PpubsSessionManager:
 # USPTO PPUBS
 # ---------------------------------------------------------------------------
 
+
 class PpubsSource(BasePatentSource):
     """USPTO PPUBS — US full-text patents, no auth required (session cookie)."""
 
-    def __init__(self, config: "PatentConfig", session_cache: SessionCache | None = None) -> None:
+    def __init__(
+        self, config: "PatentConfig", session_cache: SessionCache | None = None
+    ) -> None:
         super().__init__(config)
         self._session_mgr = PpubsSessionManager(config, session_cache or SessionCache())
 
@@ -115,9 +136,13 @@ class PpubsSource(BasePatentSource):
         try:
             token = await self._session_mgr.get_session_token()
             headers = {"Authorization": f"Bearer {token}"} if token else {}
-            async with httpx.AsyncClient(http2=True, timeout=30) as client:
+            async with httpx.AsyncClient(
+                **_client_kwargs(http2=True, timeout=30)
+            ) as client:
                 # Search for patent
-                resp = await self._search_with_retry(client, base, patent.number, headers)
+                resp = await self._search_with_retry(
+                    client, base, patent.number, headers
+                )
                 if not resp:
                     attempt.elapsed_ms = (time.monotonic() - start) * 1000
                     attempt.error = "not_found"
@@ -134,7 +159,9 @@ class PpubsSource(BasePatentSource):
                 # Attempt PDF download
                 pdf_path: Path | None = None
                 if guid:
-                    pdf_path = await self._download_pdf(client, base, guid, patent, output_dir, headers)
+                    pdf_path = await self._download_pdf(
+                        client, base, guid, patent, output_dir, headers
+                    )
 
                 attempt.success = True
                 attempt.elapsed_ms = (time.monotonic() - start) * 1000
@@ -175,7 +202,9 @@ class PpubsSource(BasePatentSource):
 
         doc = patents[0]
         guid = doc.get("guid") or doc.get("documentId")
-        txt_content = doc.get("fullText") or doc.get("claims") or doc.get("abstract") or ""
+        txt_content = (
+            doc.get("fullText") or doc.get("claims") or doc.get("abstract") or ""
+        )
         meta = PatentMetadata(
             canonical_id=doc.get("patentNumber", ""),
             jurisdiction="US",
@@ -216,12 +245,15 @@ class PpubsSource(BasePatentSource):
 # EPO OPS Token Manager
 # ---------------------------------------------------------------------------
 
+
 class EpoOpsTokenManager:
     """OAuth2 client credentials flow for EPO OPS."""
 
     _SESSION_KEY = "EPO_OPS"
 
-    def __init__(self, config: "PatentConfig", session_cache: SessionCache | None = None) -> None:
+    def __init__(
+        self, config: "PatentConfig", session_cache: SessionCache | None = None
+    ) -> None:
         self._config = config
         self._cache = session_cache or SessionCache()
         self._base = config.source_base_urls.get("EPO_OPS", "https://ops.epo.org")
@@ -237,7 +269,7 @@ class EpoOpsTokenManager:
     async def _request_token(self) -> str | None:
         url = f"{self._base}/3.2/auth/accesstoken"
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(**_client_kwargs(timeout=30)) as client:
                 resp = await client.post(
                     url,
                     data={
@@ -252,7 +284,9 @@ class EpoOpsTokenManager:
                 token = data.get("access_token")
                 expires_in = int(data.get("expires_in", 1800))
                 if token:
-                    expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+                    expires_at = datetime.now(timezone.utc) + timedelta(
+                        seconds=expires_in
+                    )
                     self._cache.set_with_expiry(self._SESSION_KEY, token, expires_at)
                 return token
         except httpx.HTTPStatusError as e:
@@ -267,10 +301,13 @@ class EpoOpsTokenManager:
 # EPO OPS Source
 # ---------------------------------------------------------------------------
 
+
 class EpoOpsSource(BasePatentSource):
     """EPO Open Patent Services — bibliographic data + PDF for 100+ offices."""
 
-    def __init__(self, config: "PatentConfig", session_cache: SessionCache | None = None) -> None:
+    def __init__(
+        self, config: "PatentConfig", session_cache: SessionCache | None = None
+    ) -> None:
         super().__init__(config)
         self._token_mgr = EpoOpsTokenManager(config, session_cache)
 
@@ -295,7 +332,7 @@ class EpoOpsSource(BasePatentSource):
                 # EPO OPS allows limited anonymous access
                 pass
 
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(**_client_kwargs(timeout=30)) as client:
                 meta = await self._fetch_biblio(client, base, patent, headers)
                 if meta is None:
                     attempt.elapsed_ms = (time.monotonic() - start) * 1000
@@ -303,11 +340,15 @@ class EpoOpsSource(BasePatentSource):
                     return FetchResult(source_attempt=attempt)
 
                 output_dir.mkdir(parents=True, exist_ok=True)
-                pdf_path = await self._fetch_pdf(client, base, patent, output_dir, headers)
+                pdf_path = await self._fetch_pdf(
+                    client, base, patent, output_dir, headers
+                )
 
                 attempt.success = True
                 attempt.elapsed_ms = (time.monotonic() - start) * 1000
-                return FetchResult(source_attempt=attempt, pdf_path=pdf_path, metadata=meta)
+                return FetchResult(
+                    source_attempt=attempt, pdf_path=pdf_path, metadata=meta
+                )
         except httpx.HTTPStatusError as e:
             attempt.elapsed_ms = (time.monotonic() - start) * 1000
             if e.response.status_code == 401:
@@ -342,7 +383,9 @@ class EpoOpsSource(BasePatentSource):
                 return None
             raise
 
-    def _parse_biblio_xml(self, xml_text: str, patent: "CanonicalPatentId") -> PatentMetadata | None:
+    def _parse_biblio_xml(
+        self, xml_text: str, patent: "CanonicalPatentId"
+    ) -> PatentMetadata | None:
         """Parse EPO OPS biblio XML response."""
         try:
             root = ET.fromstring(xml_text)
@@ -393,7 +436,9 @@ class EpoOpsSource(BasePatentSource):
         pub_id = f"{patent.jurisdiction}.{patent.number}"
         url = f"{base}/3.2/rest-services/published-data/publication/epodoc/{pub_id}/full-cycle"
         try:
-            resp = await client.get(url, headers={**headers, "Accept": "application/pdf"})
+            resp = await client.get(
+                url, headers={**headers, "Accept": "application/pdf"}
+            )
             resp.raise_for_status()
             if resp.headers.get("content-type", "").startswith("application/pdf"):
                 pdf_path = output_dir / f"{patent.canonical}.pdf"
@@ -408,6 +453,7 @@ class EpoOpsSource(BasePatentSource):
 # BigQuery Source
 # ---------------------------------------------------------------------------
 
+
 class BigQuerySource(BasePatentSource):
     """Google BigQuery patents-public-data — optional; degrades gracefully."""
 
@@ -421,10 +467,13 @@ class BigQuerySource(BasePatentSource):
         try:
             from google.cloud import bigquery  # type: ignore[import]
             import google.auth  # type: ignore[import]
+
             self._client = bigquery.Client()
             self.available = True
         except ImportError:
-            log.debug("google-cloud-bigquery not installed; BigQuery source unavailable")
+            log.debug(
+                "google-cloud-bigquery not installed; BigQuery source unavailable"
+            )
         except Exception as e:
             log.warning("BigQuery initialization failed: %s", e)
 
@@ -463,7 +512,9 @@ LIMIT 5
             title = titles[0].get("text")
 
         abstracts = row.get("abstract_localized") or []
-        abstract = next((a["text"] for a in abstracts if a.get("language") == "en"), None)
+        abstract = next(
+            (a["text"] for a in abstracts if a.get("language") == "en"), None
+        )
 
         inventors = [i.get("name", "") for i in (row.get("inventor_harmonized") or [])]
         assignees = row.get("assignee_harmonized") or []
@@ -529,6 +580,7 @@ LIMIT 5
 # Espacenet source
 # ---------------------------------------------------------------------------
 
+
 class EspacenetSource(BasePatentSource):
     """Espacenet — scrape HTML for metadata + PDF links."""
 
@@ -546,8 +598,11 @@ class EspacenetSource(BasePatentSource):
         attempt = SourceAttempt(source=self.source_name, success=False, elapsed_ms=0.0)
         try:
             from bs4 import BeautifulSoup  # type: ignore[import]
+
             url = f"{base}/patent/{patent.canonical}"
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            async with httpx.AsyncClient(
+                **_client_kwargs(timeout=30, follow_redirects=True)
+            ) as client:
                 resp = await client.get(url, headers={"Accept-Language": "en"})
                 if resp.status_code == 404:
                     attempt.error = "not_found"
@@ -591,6 +646,7 @@ class EspacenetSource(BasePatentSource):
 # WIPO PatentScope scraping
 # ---------------------------------------------------------------------------
 
+
 class WipoScrapeSource(BasePatentSource):
     """WIPO PatentScope — scrape for WO (PCT) patent data."""
 
@@ -608,6 +664,7 @@ class WipoScrapeSource(BasePatentSource):
         attempt = SourceAttempt(source=self.source_name, success=False, elapsed_ms=0.0)
         try:
             from bs4 import BeautifulSoup  # type: ignore[import]
+
             # PCT number format: WO/YEAR/SERIAL → extract year and serial
             number = patent.number  # e.g. "2024123456"
             if len(number) >= 10:
@@ -617,7 +674,9 @@ class WipoScrapeSource(BasePatentSource):
             else:
                 wo_id = patent.canonical
             url = f"{base}/search/en/detail.jsf?docId={wo_id}"
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            async with httpx.AsyncClient(
+                **_client_kwargs(timeout=30, follow_redirects=True)
+            ) as client:
                 resp = await client.get(url)
                 if resp.status_code == 404:
                     attempt.error = "not_found"
@@ -649,6 +708,7 @@ class WipoScrapeSource(BasePatentSource):
 # IP Australia (AusPat)
 # ---------------------------------------------------------------------------
 
+
 class IpAustraliaSource(BasePatentSource):
     """IP Australia AusPat REST API."""
 
@@ -666,7 +726,7 @@ class IpAustraliaSource(BasePatentSource):
         attempt = SourceAttempt(source=self.source_name, success=False, elapsed_ms=0.0)
         try:
             url = f"{base}/ols/auspat/api/v1/applications/{patent.number}"
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(**_client_kwargs(timeout=30)) as client:
                 resp = await client.get(url, headers={"Accept": "application/json"})
                 if resp.status_code == 404:
                     attempt.error = "not_found"
@@ -700,6 +760,7 @@ class IpAustraliaSource(BasePatentSource):
 # CIPO (Canada)
 # ---------------------------------------------------------------------------
 
+
 class CipoScrapeSource(BasePatentSource):
     """CIPO — scrape Canadian patent database."""
 
@@ -713,12 +774,17 @@ class CipoScrapeSource(BasePatentSource):
 
     async def fetch(self, patent: "CanonicalPatentId", output_dir: Path) -> FetchResult:
         start = time.monotonic()
-        base = self._base_url("CIPO", "https://patents.google.com")  # fallback to google
+        base = self._base_url(
+            "CIPO", "https://patents.google.com"
+        )  # fallback to google
         attempt = SourceAttempt(source=self.source_name, success=False, elapsed_ms=0.0)
         try:
             from bs4 import BeautifulSoup  # type: ignore[import]
+
             url = f"{base}/patent/{patent.canonical}"
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            async with httpx.AsyncClient(
+                **_client_kwargs(timeout=30, follow_redirects=True)
+            ) as client:
                 resp = await client.get(url)
                 if resp.status_code == 404:
                     attempt.error = "not_found"
@@ -748,6 +814,7 @@ class CipoScrapeSource(BasePatentSource):
 # ---------------------------------------------------------------------------
 # Google Patents (browser scraper wrapper)
 # ---------------------------------------------------------------------------
+
 
 class GooglePatentsSource(BasePatentSource):
     """Google Patents — wraps the Playwright-based browser scraper."""
@@ -809,6 +876,7 @@ class GooglePatentsSource(BasePatentSource):
 # ---------------------------------------------------------------------------
 # PatentsView stub (deprecated)
 # ---------------------------------------------------------------------------
+
 
 class PatentsViewStubSource(BasePatentSource):
     """PatentsView was shut down March 20, 2026. Returns helpful error."""

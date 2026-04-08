@@ -3,8 +3,8 @@
   "mcp": {
     "patent-search": {
       "type": "local",
-      "command": ["python", "-m", "patent_mcp.search"],
-      "enabled": true
+      "command": [".venv/bin/python", "-m", "patent_mcp.search"],
+      "enabled": false
     }
   }
 }

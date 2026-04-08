@@ -19,6 +19,42 @@ use crate::config::PatentConfig;
 use crate::converters::ConverterPipeline;
 use crate::id_canon::CanonicalPatentId;
 
+fn merge_metadata(existing: &mut Option<PatentMetadata>, incoming: Option<PatentMetadata>) {
+    let Some(incoming) = incoming else {
+        return;
+    };
+
+    match existing {
+        None => *existing = Some(incoming),
+        Some(current) => {
+            if current.title.is_none() {
+                current.title = incoming.title;
+            }
+            if current.abstract_text.is_none() {
+                current.abstract_text = incoming.abstract_text;
+            }
+            if current.inventors.is_empty() && !incoming.inventors.is_empty() {
+                current.inventors = incoming.inventors;
+            }
+            if current.assignee.is_none() {
+                current.assignee = incoming.assignee;
+            }
+            if current.filing_date.is_none() {
+                current.filing_date = incoming.filing_date;
+            }
+            if current.publication_date.is_none() {
+                current.publication_date = incoming.publication_date;
+            }
+            if current.grant_date.is_none() {
+                current.grant_date = incoming.grant_date;
+            }
+            if current.legal_status.is_none() {
+                current.legal_status = incoming.legal_status;
+            }
+        }
+    }
+}
+
 /// Result of fetching a single patent from one source.
 #[derive(Debug, Clone)]
 pub struct FetchResult {
@@ -152,19 +188,38 @@ impl FetcherOrchestrator {
         patent: &CanonicalPatentId,
         output_dir: &Path,
     ) -> OrchestratorResult {
+        self.fetch_internal(patent, output_dir, false).await
+    }
+
+    pub async fn fetch_force_refresh(
+        &self,
+        patent: &CanonicalPatentId,
+        output_dir: &Path,
+    ) -> OrchestratorResult {
+        self.fetch_internal(patent, output_dir, true).await
+    }
+
+    async fn fetch_internal(
+        &self,
+        patent: &CanonicalPatentId,
+        output_dir: &Path,
+        force_refresh: bool,
+    ) -> OrchestratorResult {
         // Cache hit
-        if let Ok(Some(cached)) = self.cache.lookup(&patent.canonical) {
-            if cached.is_complete {
-                return OrchestratorResult {
-                    canonical_id: patent.canonical.clone(),
-                    success: true,
-                    cache_dir: Some(cached.cache_dir),
-                    files: cached.files,
-                    metadata: cached.metadata,
-                    sources: vec![],
-                    error: None,
-                    from_cache: true,
-                };
+        if !force_refresh {
+            if let Ok(Some(cached)) = self.cache.lookup(&patent.canonical) {
+                if cached.is_complete {
+                    return OrchestratorResult {
+                        canonical_id: patent.canonical.clone(),
+                        success: true,
+                        cache_dir: Some(cached.cache_dir),
+                        files: cached.files,
+                        metadata: cached.metadata,
+                        sources: vec![],
+                        error: None,
+                        from_cache: true,
+                    };
+                }
             }
         }
 
@@ -178,47 +233,20 @@ impl FetcherOrchestrator {
         let mut all_txts: Vec<PathBuf> = Vec::new();
         let mut best_metadata: Option<PatentMetadata> = None;
 
-        if self.config.fetch_all_sources {
-            // Fetch from all sources sequentially (avoids lifetime issues with async closures)
-            for source in &sources {
-                let source_name = source.source_name().to_string();
-                debug!("Trying source {} for {}", source_name, patent.canonical);
-                let result = source.fetch(patent, output_dir, &self.config).await;
-                all_attempts.push(result.source_attempt.clone());
-                if result.source_attempt.success {
-                    if let Some(p) = result.pdf_path {
-                        all_pdfs.push(p);
-                    }
-                    if let Some(p) = result.txt_path {
-                        all_txts.push(p);
-                    }
-                    if best_metadata.is_none() {
-                        best_metadata = result.metadata;
-                    }
+        // Collect from all structured sources so later sources can fill metadata gaps.
+        for source in &sources {
+            let source_name = source.source_name().to_string();
+            debug!("Trying source {} for {}", source_name, patent.canonical);
+            let result = source.fetch(patent, output_dir, &self.config).await;
+            all_attempts.push(result.source_attempt.clone());
+            if result.source_attempt.success {
+                if let Some(p) = result.pdf_path {
+                    all_pdfs.push(p);
                 }
-            }
-        } else {
-            // Sequential: stop after first success
-            for source in &sources {
-                debug!(
-                    "Trying source {} for {}",
-                    source.source_name(),
-                    patent.canonical
-                );
-                let result = source.fetch(patent, output_dir, &self.config).await;
-                all_attempts.push(result.source_attempt.clone());
-                if result.source_attempt.success {
-                    if let Some(p) = result.pdf_path {
-                        all_pdfs.push(p);
-                    }
-                    if let Some(p) = result.txt_path {
-                        all_txts.push(p);
-                    }
-                    if best_metadata.is_none() {
-                        best_metadata = result.metadata;
-                    }
-                    break;
+                if let Some(p) = result.txt_path {
+                    all_txts.push(p);
                 }
+                merge_metadata(&mut best_metadata, result.metadata);
             }
         }
 
@@ -300,6 +328,23 @@ impl FetcherOrchestrator {
         patents: &[CanonicalPatentId],
         output_base: &Path,
     ) -> Vec<OrchestratorResult> {
+        self.fetch_batch_internal(patents, output_base, false).await
+    }
+
+    pub async fn fetch_batch_force_refresh(
+        &self,
+        patents: &[CanonicalPatentId],
+        output_base: &Path,
+    ) -> Vec<OrchestratorResult> {
+        self.fetch_batch_internal(patents, output_base, true).await
+    }
+
+    async fn fetch_batch_internal(
+        &self,
+        patents: &[CanonicalPatentId],
+        output_base: &Path,
+        force_refresh: bool,
+    ) -> Vec<OrchestratorResult> {
         use futures::stream::{FuturesOrdered, StreamExt};
         let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(self.config.concurrency));
         let mut ordered = FuturesOrdered::new();
@@ -312,7 +357,9 @@ impl FetcherOrchestrator {
                 // Acquire permit inside the async block so FuturesOrdered can
                 // poll futures concurrently instead of blocking the for loop.
                 let permit = sem.acquire_owned().await.expect("semaphore closed");
-                let res = self.fetch(&patent_clone, &out_dir).await;
+                let res = self
+                    .fetch_internal(&patent_clone, &out_dir, force_refresh)
+                    .await;
                 drop(permit);
                 res
             });
@@ -330,6 +377,32 @@ impl FetcherOrchestrator {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    struct StubSource {
+        name: &'static str,
+        jurisdictions: &'static [&'static str],
+        result: FetchResult,
+    }
+
+    #[async_trait]
+    impl PatentSource for StubSource {
+        fn source_name(&self) -> &str {
+            self.name
+        }
+
+        fn supported_jurisdictions(&self) -> &[&str] {
+            self.jurisdictions
+        }
+
+        async fn fetch(
+            &self,
+            _patent: &CanonicalPatentId,
+            _output_dir: &Path,
+            _config: &PatentConfig,
+        ) -> FetchResult {
+            self.result.clone()
+        }
+    }
 
     fn make_config(tmp: &TempDir) -> PatentConfig {
         PatentConfig {
@@ -500,5 +573,94 @@ mod tests {
             !names.contains(&"web_search"),
             "web_search should not be in the sources list"
         );
+    }
+
+    #[tokio::test]
+    async fn test_fetch_merges_metadata_across_sources() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = make_config(&tmp);
+        let cache = PatentCache::new(&cfg).unwrap();
+
+        let sparse = FetchResult {
+            source_attempt: SourceAttempt {
+                source: "sparse".into(),
+                success: true,
+                elapsed_ms: 1.0,
+                error: None,
+                metadata: None,
+            },
+            pdf_path: None,
+            txt_path: None,
+            metadata: Some(PatentMetadata {
+                canonical_id: "US7654321".into(),
+                jurisdiction: "US".into(),
+                doc_type: "patent".into(),
+                title: None,
+                abstract_text: None,
+                inventors: vec![],
+                assignee: None,
+                filing_date: None,
+                publication_date: None,
+                grant_date: None,
+                fetched_at: "2026-01-01T00:00:00Z".into(),
+                legal_status: None,
+            }),
+        };
+
+        let rich = FetchResult {
+            source_attempt: SourceAttempt {
+                source: "rich".into(),
+                success: true,
+                elapsed_ms: 2.0,
+                error: None,
+                metadata: None,
+            },
+            pdf_path: None,
+            txt_path: None,
+            metadata: Some(PatentMetadata {
+                canonical_id: "US7654321".into(),
+                jurisdiction: "US".into(),
+                doc_type: "patent".into(),
+                title: Some("Useful patent title".into()),
+                abstract_text: Some("Useful abstract".into()),
+                inventors: vec!["Ada Lovelace".into()],
+                assignee: Some("Patent Corp".into()),
+                filing_date: Some("2020-01-01".into()),
+                publication_date: Some("2021-01-01".into()),
+                grant_date: None,
+                fetched_at: "2026-01-01T00:00:01Z".into(),
+                legal_status: None,
+            }),
+        };
+
+        let orch = FetcherOrchestrator {
+            config: cfg,
+            cache,
+            sources: vec![
+                Box::new(StubSource {
+                    name: "sparse",
+                    jurisdictions: &["US"],
+                    result: sparse,
+                }),
+                Box::new(StubSource {
+                    name: "rich",
+                    jurisdictions: &["US"],
+                    result: rich,
+                }),
+            ],
+        };
+
+        let patent = crate::id_canon::canonicalize("US7654321");
+        let result = orch.fetch(&patent, tmp.path()).await;
+
+        assert!(result.success);
+        assert_eq!(result.sources.len(), 2);
+        let metadata = result.metadata.unwrap();
+        assert_eq!(metadata.title.as_deref(), Some("Useful patent title"));
+        assert_eq!(metadata.abstract_text.as_deref(), Some("Useful abstract"));
+        assert_eq!(metadata.inventors, vec!["Ada Lovelace"]);
+        assert_eq!(metadata.assignee.as_deref(), Some("Patent Corp"));
+        assert_eq!(metadata.filing_date.as_deref(), Some("2020-01-01"));
+        assert_eq!(metadata.publication_date.as_deref(), Some("2021-01-01"));
     }
 }

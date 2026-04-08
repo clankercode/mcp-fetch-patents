@@ -7,6 +7,9 @@ default:
 
 # ── Install ──────────────────────────────────────────────────────────────────
 
+# Default install (Rust binary)
+install: install-rs
+
 # Install Python package with dev dependencies (editable, via pip)
 install-py:
     pip install -e ".[dev]"
@@ -15,9 +18,9 @@ install-py:
 install-uv:
     uv pip install -e ".[dev]"
 
-# Install Rust binary (via cargo install from local path)
+# Install Rust binary from the local crate, replacing any existing install
 install-rs:
-    cargo install --path src/rust
+    cargo install --path src/rust --force
 
 # Install Python with all optional extras (via pip)
 install-all:
@@ -97,6 +100,14 @@ serve:
 # Start the patent-search MCP server (used by OpenCode agent)
 serve-search:
     python -m patent_mcp.search
+
+# Smoke-test the Rust MCP server directly over stdio JSON-RPC
+mcp-smoke-rust PATENT_ID='US10000000B2':
+    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fetch_patents","arguments":{"patent_ids":["{{PATENT_ID}}"],"force_refresh":true}}}' | cargo run --quiet --manifest-path src/rust/Cargo.toml --bin patent-mcp-server
+
+# Smoke-test the installed Rust MCP binary directly over stdio JSON-RPC
+mcp-smoke-rust-installed PATENT_ID='US10000000B2':
+    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fetch_patents","arguments":{"patent_ids":["{{PATENT_ID}}"],"force_refresh":true}}}' | /home/xertrov/.cargo/bin/patent-mcp-server
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 

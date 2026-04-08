@@ -8,6 +8,7 @@ Entry point for subprocess calls:
 
 Output: single JSON line on stdout describing the SourceResult.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,10 +21,16 @@ from typing import Optional
 
 import httpx
 
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 patent-mcp-server/0.1"
+)
+
 
 # ---------------------------------------------------------------------------
 # Result type
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class BrowserFetchResult:
@@ -45,6 +52,7 @@ class BrowserFetchResult:
 # ---------------------------------------------------------------------------
 # Mock mode (test fixtures)
 # ---------------------------------------------------------------------------
+
 
 def _fetch_from_fixture(canonical_id: str, output_dir: Path) -> BrowserFetchResult:
     """Load patent HTML fixture instead of launching a real browser."""
@@ -87,15 +95,18 @@ def _parse_google_patents_html(
 
     result.title = ld.get("name") or ld.get("headline")
     result.abstract = ld.get("description")
-    result.assignee = ld.get("assignee", {}).get("name") if isinstance(ld.get("assignee"), dict) else ld.get("assignee")
+    result.assignee = (
+        ld.get("assignee", {}).get("name")
+        if isinstance(ld.get("assignee"), dict)
+        else ld.get("assignee")
+    )
     result.filing_date = ld.get("dateCreated") or ld.get("filingDate")
     result.publication_date = ld.get("datePublished")
 
     inventors_raw = ld.get("inventor", [])
     if isinstance(inventors_raw, list):
         result.inventors = [
-            i.get("name", "") if isinstance(i, dict) else str(i)
-            for i in inventors_raw
+            i.get("name", "") if isinstance(i, dict) else str(i) for i in inventors_raw
         ]
     elif isinstance(inventors_raw, dict):
         result.inventors = [inventors_raw.get("name", "")]
@@ -107,6 +118,7 @@ def _parse_google_patents_html(
 # ---------------------------------------------------------------------------
 # Real Playwright mode
 # ---------------------------------------------------------------------------
+
 
 def _fetch_with_playwright(canonical_id: str, output_dir: Path) -> BrowserFetchResult:
     """Fetch patent using a real Playwright headless browser."""
@@ -127,10 +139,7 @@ def _fetch_with_playwright(canonical_id: str, output_dir: Path) -> BrowserFetchR
         try:
             browser = p.chromium.launch(headless=True)
             ctx = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                ),
+                user_agent=DEFAULT_USER_AGENT,
                 viewport={"width": 1280, "height": 800},
             )
             page = ctx.new_page()
@@ -155,6 +164,7 @@ def _fetch_with_playwright(canonical_id: str, output_dir: Path) -> BrowserFetchR
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def fetch(canonical_id: str, output_dir: Path) -> BrowserFetchResult:
     """Fetch patent from Google Patents. Uses mock if PATENT_PLAYWRIGHT_MOCK_DIR is set."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -169,7 +179,14 @@ def fetch(canonical_id: str, output_dir: Path) -> BrowserFetchResult:
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print(json.dumps({"success": False, "error": "Usage: google_patents.py <id> <output_dir>"}))
+        print(
+            json.dumps(
+                {
+                    "success": False,
+                    "error": "Usage: google_patents.py <id> <output_dir>",
+                }
+            )
+        )
         sys.exit(1)
 
     _id = sys.argv[1]

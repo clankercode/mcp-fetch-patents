@@ -26,7 +26,9 @@ The agent will automatically create a session, run multiple searches across USPT
 
 ### MCP Server (required for search tools)
 
-The `patent-search` MCP server is configured in `opencode.json`. It starts automatically when OpenCode loads the project. Prerequisites:
+Use a user-level OpenCode MCP entry for `patent-search` if you want the Python search server available across projects. The repo's `opencode.json` keeps a disabled example entry that launches from this checkout with `.venv/bin/python -m patent_mcp.search`.
+
+If you want to enable the checkout-local Python server, prerequisite:
 
 ```bash
 pip install -e ".[dev]"

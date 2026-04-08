@@ -19,6 +19,11 @@ use crate::config::PatentConfig;
 use crate::fetchers::{FetchResult, PatentSource};
 use crate::id_canon::CanonicalPatentId;
 
+const DEFAULT_USER_AGENT: &str = concat!(
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ",
+    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 patent-mcp-server/0.1"
+);
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -88,6 +93,16 @@ fn fail_result(source: &str, error: &str) -> FetchResult {
         txt_path: None,
         metadata: None,
     }
+}
+
+fn metadata_has_useful_fields(meta: &PatentMetadata) -> bool {
+    meta.title.is_some()
+        || meta.abstract_text.is_some()
+        || !meta.inventors.is_empty()
+        || meta.assignee.is_some()
+        || meta.filing_date.is_some()
+        || meta.publication_date.is_some()
+        || meta.grant_date.is_some()
 }
 
 // ---------------------------------------------------------------------------
@@ -162,6 +177,7 @@ impl PatentSource for EspacenetSource {
         let client = match Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs as u64))
             .redirect(reqwest::redirect::Policy::limited(10))
+            .user_agent(DEFAULT_USER_AGENT)
             .build()
         {
             Ok(c) => c,
@@ -249,6 +265,12 @@ impl PatentSource for EspacenetSource {
             fetched_at: now_iso(),
             legal_status: None,
         };
+
+        if !metadata_has_useful_fields(&meta) {
+            let mut res = fail_result(source, "Espacenet returned no usable metadata");
+            res.source_attempt.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            return res;
+        }
 
         FetchResult {
             source_attempt: SourceAttempt {
@@ -627,6 +649,7 @@ impl PpubsSource {
 
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
+            .user_agent(DEFAULT_USER_AGENT)
             .build()
             .ok()?;
 
@@ -679,6 +702,7 @@ impl PatentSource for PpubsSource {
         let token = self.get_session_token(config).await;
         let client = match Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs as u64))
+            .user_agent(DEFAULT_USER_AGENT)
             .build()
         {
             Ok(c) => c,
@@ -689,6 +713,7 @@ impl PatentSource for PpubsSource {
         let search_url = format!("{}/ppubs-api/v1/patent", base);
         let mut req = client
             .get(&search_url)
+            .header("Accept-Language", "en")
             .query(&[("patentNumber", &patent.number)]);
         if let Some(ref t) = token {
             req = req.header("Authorization", format!("Bearer {}", t));
@@ -859,6 +884,7 @@ impl EpoOpsSource {
 
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
+            .user_agent(DEFAULT_USER_AGENT)
             .build()
             .ok()?;
 
@@ -1075,6 +1101,7 @@ impl PatentSource for EpoOpsSource {
         let token = self.get_token(config).await;
         let client = match Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs as u64))
+            .user_agent(DEFAULT_USER_AGENT)
             .build()
         {
             Ok(c) => c,
@@ -1097,6 +1124,7 @@ impl PatentSource for EpoOpsSource {
 
         let resp = match client
             .get(&biblio_url)
+            .header("Accept-Language", "en")
             .headers(headers.clone())
             .send()
             .await
@@ -1167,6 +1195,12 @@ impl PatentSource for EpoOpsSource {
                     }
                 }
             }
+        }
+
+        if pdf_path.is_none() && !metadata_has_useful_fields(&meta) {
+            let mut res = fail_result(source, "EPO OPS returned no usable metadata");
+            res.source_attempt.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            return res;
         }
 
         FetchResult {
@@ -1556,5 +1590,30 @@ mod tests {
         // Should be RFC3339 formatted
         assert!(ts.contains("T"));
         assert!(ts.len() > 10);
+    }
+
+    #[test]
+    fn test_metadata_has_useful_fields_requires_real_content() {
+        let empty = PatentMetadata {
+            canonical_id: "US7654321".into(),
+            jurisdiction: "US".into(),
+            doc_type: "patent".into(),
+            title: None,
+            abstract_text: None,
+            inventors: vec![],
+            assignee: None,
+            filing_date: None,
+            publication_date: None,
+            grant_date: None,
+            fetched_at: now_iso(),
+            legal_status: None,
+        };
+        assert!(!metadata_has_useful_fields(&empty));
+
+        let titled = PatentMetadata {
+            title: Some("Useful title".into()),
+            ..empty
+        };
+        assert!(metadata_has_useful_fields(&titled));
     }
 }

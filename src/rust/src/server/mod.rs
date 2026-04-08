@@ -6,6 +6,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::Write;
+use std::collections::HashMap;
 
 use crate::config::PatentConfig;
 
@@ -112,6 +113,121 @@ fn tools_list() -> Value {
     })
 }
 
+enum FetchPlan {
+    Invalid(crate::fetchers::OrchestratorResult),
+    Valid,
+}
+
+async fn build_fetch_patents_payload(
+    patent_ids: &[String],
+    force_refresh: bool,
+    config: &PatentConfig,
+    orchestrator: &crate::fetchers::FetcherOrchestrator,
+) -> Value {
+    if patent_ids.is_empty() {
+        return serde_json::json!({
+            "results": [],
+            "summary": {
+                "total": 0,
+                "success": 0,
+                "cached": 0,
+                "errors": 0,
+                "total_duration_ms": 0.0
+            }
+        });
+    }
+
+    let mut plan = Vec::with_capacity(patent_ids.len());
+    let mut valid_patents = Vec::new();
+
+    for raw_id in patent_ids {
+        let canon = crate::id_canon::canonicalize(raw_id);
+        if canon.jurisdiction == "UNKNOWN" {
+            plan.push(FetchPlan::Invalid(crate::fetchers::OrchestratorResult {
+                canonical_id: canon.canonical,
+                success: false,
+                cache_dir: None,
+                files: HashMap::new(),
+                metadata: None,
+                sources: vec![],
+                error: Some(format!("Invalid patent ID: {}", raw_id)),
+                from_cache: false,
+            }));
+        } else {
+            valid_patents.push(canon.clone());
+            plan.push(FetchPlan::Valid);
+        }
+    }
+
+    let valid_results = if valid_patents.is_empty() {
+        Vec::new()
+    } else {
+        if force_refresh {
+            orchestrator
+                .fetch_batch_force_refresh(&valid_patents, &config.cache_local_dir)
+                .await
+        } else {
+            orchestrator.fetch_batch(&valid_patents, &config.cache_local_dir).await
+        }
+    };
+    let mut valid_iter = valid_results.into_iter();
+
+    let mut results = Vec::with_capacity(patent_ids.len());
+    let mut n_success = 0u32;
+    let mut n_cached = 0u32;
+    let mut n_errors = 0u32;
+
+    for item in plan {
+        let orc = match item {
+            FetchPlan::Invalid(result) => result,
+            FetchPlan::Valid => valid_iter
+                .next()
+                .expect("valid patent results should align with fetch plan"),
+        };
+
+        let files: std::collections::HashMap<String, String> = orc
+            .files
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_string_lossy().into_owned()))
+            .collect();
+
+        let metadata: Option<serde_json::Value> = orc
+            .metadata
+            .as_ref()
+            .map(|m| serde_json::to_value(m).unwrap_or(Value::Null));
+
+        if orc.from_cache {
+            n_cached += 1;
+            n_success += 1;
+        } else if orc.success {
+            n_success += 1;
+        } else {
+            n_errors += 1;
+        }
+
+        results.push(serde_json::json!({
+            "canonical_id": orc.canonical_id,
+            "success": orc.success,
+            "from_cache": orc.from_cache,
+            "files": files,
+            "metadata": metadata,
+            "error": orc.error,
+        }));
+    }
+
+    let total = results.len() as u32;
+    serde_json::json!({
+        "results": results,
+        "summary": {
+            "total": total,
+            "success": n_success,
+            "cached": n_cached,
+            "errors": n_errors,
+            "total_duration_ms": 0.0
+        }
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Sync routing (parse + non-tool dispatch)
 // ---------------------------------------------------------------------------
@@ -178,71 +294,19 @@ async fn execute_tool_call(
                 .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
                 .unwrap_or_default();
 
-            if patent_ids.is_empty() {
-                return RpcResponse::ok(id, serde_json::json!({
-                    "content": [{"type": "text", "text": serde_json::json!({
-                        "results": [],
-                        "summary": {
-                            "total": 0,
-                            "success": 0,
-                            "cached": 0,
-                            "errors": 0,
-                            "total_duration_ms": 0.0
-                        }
-                    }).to_string()}]
-                }));
-            }
+            let force_refresh = params
+                .get("arguments")
+                .and_then(|a| a.get("force_refresh"))
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
 
-            let canonicals: Vec<crate::id_canon::CanonicalPatentId> = patent_ids.iter()
-                .map(|id| crate::id_canon::canonicalize(id))
-                .collect();
-
-            let output_base = config.cache_local_dir.clone();
-            let batch = orchestrator.fetch_batch(&canonicals, &output_base).await;
-
-            let mut results = Vec::new();
-            let mut n_success = 0u32;
-            let mut n_cached = 0u32;
-            let mut n_errors = 0u32;
-
-            for orc in &batch {
-                let files: std::collections::HashMap<String, String> = orc.files.iter()
-                    .map(|(k, v)| (k.clone(), v.to_string_lossy().into_owned()))
-                    .collect();
-
-                let metadata: Option<serde_json::Value> = orc.metadata.as_ref()
-                    .map(|m| serde_json::to_value(m).unwrap_or(Value::Null));
-
-                if orc.from_cache {
-                    n_cached += 1;
-                    n_success += 1;
-                } else if orc.success {
-                    n_success += 1;
-                } else {
-                    n_errors += 1;
-                }
-
-                results.push(serde_json::json!({
-                    "canonical_id": orc.canonical_id,
-                    "success": orc.success,
-                    "from_cache": orc.from_cache,
-                    "files": files,
-                    "metadata": metadata,
-                    "error": orc.error,
-                }));
-            }
-
-            let total = results.len() as u32;
-            let payload = serde_json::json!({
-                "results": results,
-                "summary": {
-                    "total": total,
-                    "success": n_success,
-                    "cached": n_cached,
-                    "errors": n_errors,
-                    "total_duration_ms": 0.0
-                }
-            });
+            let payload = build_fetch_patents_payload(
+                &patent_ids,
+                force_refresh,
+                config,
+                orchestrator,
+            )
+            .await;
 
             RpcResponse::ok(id, serde_json::json!({
                 "content": [{"type": "text", "text": payload.to_string()}]
@@ -466,6 +530,27 @@ mod tests {
         let config = make_config();
         let resp = handle_line(line, &config);
         assert!(resp.result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_invalid_fetch_patents_returns_errors() {
+        let config = make_config();
+        let cache = crate::cache::PatentCache::new(&config).unwrap();
+        let orchestrator = crate::fetchers::FetcherOrchestrator::new(config.clone(), cache);
+        let payload = build_fetch_patents_payload(
+            &[String::from("INVALID-XXXXX-NOTREAL"), String::from("US7654321")],
+            false,
+            &config,
+            &orchestrator,
+        )
+        .await;
+
+        assert_eq!(payload["summary"]["total"], 2);
+        assert_eq!(payload["summary"]["errors"], 1);
+        assert_eq!(payload["summary"]["success"], 1);
+        assert_eq!(payload["results"][0]["success"], false);
+        assert!(payload["results"][0]["error"].as_str().unwrap().contains("Invalid patent ID"));
+        assert_eq!(payload["results"][1]["canonical_id"], "US7654321");
     }
 
     #[test]

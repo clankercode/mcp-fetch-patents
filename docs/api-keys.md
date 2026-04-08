@@ -107,6 +107,16 @@ All values can be overridden with environment variables. Environment variables t
 
 The Rust server autoloads `~/.patents-mcp.env` first, then `.env` in the current working directory, then reads `~/.patents.toml`, and finally applies explicit environment variables.
 
+To verify the Rust server is actually picking up the config you expect, smoke-test it directly over stdio JSON-RPC instead of relying on your editor's MCP reload behavior:
+
+```bash
+# Dev server from this checkout
+just mcp-smoke-rust
+
+# Installed binary from ~/.cargo/bin
+just mcp-smoke-rust-installed
+```
+
 `~/.patents-mcp.env` can contain lines like:
 
 ```dotenv
