@@ -2,7 +2,7 @@
 
 All API keys are optional. The server degrades gracefully: if a key is missing, that source is skipped or uses its no-auth path.
 
-For the installed Rust server, put credentials in `~/.patents.toml` and/or pass them as environment variables from your MCP launcher. Do not rely on a repo-local `.env` unless you are running the Python implementation from that checkout.
+For the installed Rust server, credentials can live in `~/.patents.toml`, normal environment variables, or `~/.patents-mcp.env` autoloaded by the server. A repo-local `.env` only helps when the server is launched from that checkout.
 
 ---
 
@@ -105,23 +105,9 @@ disabled = []
 
 All values can be overridden with environment variables. Environment variables take precedence over the config file.
 
-Example launcher pattern for the installed Rust server:
+The Rust server autoloads `~/.patents-mcp.env` first, then `.env` in the current working directory, then reads `~/.patents.toml`, and finally applies explicit environment variables.
 
-```json
-{
-  "mcpServers": {
-    "patents": {
-      "command": "bash",
-      "args": [
-        "-lc",
-        "set -a; [ -f \"$HOME/.patents-mcp.env\" ] && . \"$HOME/.patents-mcp.env\"; exec patent-mcp-server"
-      ]
-    }
-  }
-}
-```
-
-Where `~/.patents-mcp.env` contains lines like:
+`~/.patents-mcp.env` can contain lines like:
 
 ```dotenv
 PATENT_SERPAPI_KEY=...

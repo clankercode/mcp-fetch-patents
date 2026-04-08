@@ -66,7 +66,7 @@ Add to your Claude Desktop, Claude Code, Cursor, or Cline config:
 
 That's the whole setup. No API keys needed — 6 of 9 sources work without auth (USPTO, Espacenet, WIPO, IP Australia, CIPO, DuckDuckGo). Add keys later to unlock EPO OPS, BigQuery, and SerpAPI. See [docs/api-keys.md](docs/api-keys.md).
 
-For an installed Rust server, do not rely on a repo-local `.env`. Use `~/.patents.toml` and/or environment variables supplied by your MCP launcher.
+For an installed Rust server, secrets can live in `~/.patents.toml`, normal environment variables, or `~/.patents-mcp.env` autoloaded by the server. A repo-local `.env` is only useful when the server is launched from that checkout.
 
 ### Use it
 
@@ -186,7 +186,7 @@ Agent                    MCP Server (Rust)
 
 ## Configuration
 
-All config via `~/.patents.toml` or environment variables (env vars take precedence). A repo-local `.env` is only useful for the Python implementation when launched from that checkout; it is not how the installed Rust server discovers secrets.
+All config via autoloaded env files, `~/.patents.toml`, or environment variables (env vars take precedence). The Rust server autoloads `~/.patents-mcp.env` and then `.env` from the current working directory before reading `~/.patents.toml` and explicit environment variables.
 
 | Env var | Default | Description |
 |---|---|---|

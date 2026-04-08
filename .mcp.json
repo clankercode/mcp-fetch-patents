@@ -2,11 +2,8 @@
   "mcpServers": {
     "patent-tools": {
       "type": "stdio",
-      "command": "/usr/bin/bash",
-      "args": [
-        "-lc",
-        "set -a; [ -f \"$HOME/.patents-mcp.env\" ] && . \"$HOME/.patents-mcp.env\"; exec /home/xertrov/.cargo/bin/patent-mcp-server"
-      ],
+      "command": "/home/xertrov/.cargo/bin/patent-mcp-server",
+      "args": [],
       "env": {
         "PATH": "/home/xertrov/src/mcp-fetch-patents/.venv/bin:/home/xertrov/.cargo/bin:/usr/bin:/bin"
       }

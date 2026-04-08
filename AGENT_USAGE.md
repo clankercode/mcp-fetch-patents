@@ -42,7 +42,7 @@ PATENT_SERPAPI_KEY=your-key-here
 PATENT_EPO_KEY=client_id:client_secret
 ```
 
-If you are using the installed Rust server, use `~/.patents.toml` and/or environment variables injected by your MCP launcher instead of a repo-local `.env`.
+If you are using the installed Rust server, put secrets in `~/.patents-mcp.env`, `~/.patents.toml`, or normal environment variables. The Rust server autoloads `~/.patents-mcp.env` itself, so your launcher can stay simple.
 
 ## Agent Capabilities
 

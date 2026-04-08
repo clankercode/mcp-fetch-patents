@@ -2,8 +2,9 @@
 //!
 //! Loads from:
 //!   1. Compiled defaults
-//!   2. ~/.patents.toml (or PATENT_CONFIG_FILE env override)
-//!   3. Environment variables (highest priority)
+//!   2. Autoloaded env files (`~/.patents-mcp.env`, then `.env` in cwd)
+//!   3. ~/.patents.toml (or PATENT_CONFIG_FILE env override)
+//!   4. Environment variables (highest priority)
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -50,7 +51,7 @@ struct TomlSources {
     priority: Option<Vec<String>>,
     fetch_all_sources: Option<bool>,
     concurrency: Option<usize>,
-    timeout_seconds: Option<f64>,    // matches Python
+    timeout_seconds: Option<f64>, // matches Python
     epo_ops: Option<TomlEpoOps>,
 }
 
@@ -62,8 +63,8 @@ struct TomlEpoOps {
 
 #[derive(Debug, Deserialize, Default)]
 struct TomlConverters {
-    pdf_to_markdown_order: Option<Vec<String>>,  // matches Python
-    disable: Option<Vec<String>>,                 // matches Python
+    pdf_to_markdown_order: Option<Vec<String>>, // matches Python
+    disable: Option<Vec<String>>,               // matches Python
 }
 
 /// XDG data home: $XDG_DATA_HOME or ~/.local/share
@@ -98,15 +99,72 @@ fn default_source_priority() -> Vec<String> {
 }
 
 fn default_converters_order() -> Vec<String> {
-    vec!["pymupdf4llm".into(), "pdfplumber".into(), "pdftotext".into(), "marker".into()]
+    vec![
+        "pymupdf4llm".into(),
+        "pdfplumber".into(),
+        "pdftotext".into(),
+        "marker".into(),
+    ]
 }
 
 fn parse_bool_env(v: &str) -> bool {
     matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
 }
 
+fn load_env_file_if_present(path: &PathBuf) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(path)?;
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+
+        let line = line.strip_prefix("export ").unwrap_or(line);
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+
+        let key = key.trim();
+        if key.is_empty() || std::env::var_os(key).is_some() {
+            continue;
+        }
+
+        let value = value.trim();
+        let value = if value.len() >= 2 {
+            let bytes = value.as_bytes();
+            if (bytes[0] == b'"' && bytes[value.len() - 1] == b'"')
+                || (bytes[0] == b'\'' && bytes[value.len() - 1] == b'\'')
+            {
+                &value[1..value.len() - 1]
+            } else {
+                value
+            }
+        } else {
+            value
+        };
+
+        std::env::set_var(key, value);
+    }
+
+    Ok(())
+}
+
+fn load_autoload_env_files() -> Result<()> {
+    if let Some(home) = dirs::home_dir() {
+        load_env_file_if_present(&home.join(".patents-mcp.env"))?;
+    }
+    load_env_file_if_present(&PathBuf::from(".env"))?;
+    Ok(())
+}
+
 /// Load config from defaults → TOML file → env vars.
 pub fn load_config() -> Result<PatentConfig> {
+    load_autoload_env_files()?;
+
     let mut cfg = PatentConfig {
         cache_local_dir: PathBuf::from(".patents"),
         cache_global_db: default_global_db(),
@@ -201,8 +259,14 @@ pub fn load_config() -> Result<PatentConfig> {
     }
     if let Ok(v) = std::env::var("PATENT_EPO_KEY") {
         let parts: Vec<&str> = v.splitn(2, ':').collect();
-        cfg.epo_client_id = parts.first().filter(|s| !s.is_empty()).map(|s| s.to_string());
-        cfg.epo_client_secret = parts.get(1).filter(|s| !s.is_empty()).map(|s| s.to_string());
+        cfg.epo_client_id = parts
+            .first()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        cfg.epo_client_secret = parts
+            .get(1)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
     }
     if let Ok(v) = std::env::var("PATENT_LENS_KEY") {
         cfg.lens_api_key = Some(v).filter(|s| !s.is_empty());
@@ -223,6 +287,47 @@ pub fn load_config() -> Result<PatentConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use once_cell::sync::Lazy;
+    use std::sync::{Mutex, MutexGuard};
+    use tempfile::TempDir;
+
+    static CONFIG_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+    struct TestEnvGuard {
+        _lock: MutexGuard<'static, ()>,
+        saved_home: Option<std::ffi::OsString>,
+        saved_serpapi: Option<std::ffi::OsString>,
+        saved_cwd: PathBuf,
+    }
+
+    impl TestEnvGuard {
+        fn new() -> Self {
+            Self {
+                _lock: CONFIG_TEST_LOCK.lock().expect("config test lock"),
+                saved_home: std::env::var_os("HOME"),
+                saved_serpapi: std::env::var_os("PATENT_SERPAPI_KEY"),
+                saved_cwd: std::env::current_dir().expect("current dir"),
+            }
+        }
+    }
+
+    impl Drop for TestEnvGuard {
+        fn drop(&mut self) {
+            if let Some(home) = &self.saved_home {
+                std::env::set_var("HOME", home);
+            } else {
+                std::env::remove_var("HOME");
+            }
+
+            if let Some(key) = &self.saved_serpapi {
+                std::env::set_var("PATENT_SERPAPI_KEY", key);
+            } else {
+                std::env::remove_var("PATENT_SERPAPI_KEY");
+            }
+
+            let _ = std::env::set_current_dir(&self.saved_cwd);
+        }
+    }
 
     #[test]
     fn test_defaults() {
@@ -288,5 +393,73 @@ mod tests {
         // Can't easily override env in tests without unsafety; just check it returns something
         let path = xdg_data_home();
         assert!(!path.as_os_str().is_empty());
+    }
+
+    #[test]
+    fn test_load_config_autoloads_home_env_file() {
+        let _guard = TestEnvGuard::new();
+        let temp = TempDir::new().expect("tempdir");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&home).expect("create home");
+        std::fs::write(
+            home.join(".patents-mcp.env"),
+            "PATENT_SERPAPI_KEY=from_home_env\n",
+        )
+        .expect("write env");
+
+        std::env::set_var("HOME", &home);
+        std::env::remove_var("PATENT_SERPAPI_KEY");
+        std::env::set_current_dir(temp.path()).expect("set cwd");
+
+        let cfg = load_config().expect("load config");
+        assert_eq!(cfg.serpapi_key.as_deref(), Some("from_home_env"));
+    }
+
+    #[test]
+    fn test_load_config_home_env_beats_cwd_env() {
+        let _guard = TestEnvGuard::new();
+        let temp = TempDir::new().expect("tempdir");
+        let home = temp.path().join("home");
+        let cwd = temp.path().join("cwd");
+        std::fs::create_dir_all(&home).expect("create home");
+        std::fs::create_dir_all(&cwd).expect("create cwd");
+        std::fs::write(
+            home.join(".patents-mcp.env"),
+            "PATENT_SERPAPI_KEY=from_home_env\n",
+        )
+        .expect("write home env");
+        std::fs::write(cwd.join(".env"), "PATENT_SERPAPI_KEY=from_cwd_env\n")
+            .expect("write cwd env");
+
+        std::env::set_var("HOME", &home);
+        std::env::remove_var("PATENT_SERPAPI_KEY");
+        std::env::set_current_dir(&cwd).expect("set cwd");
+
+        let cfg = load_config().expect("load config");
+        assert_eq!(cfg.serpapi_key.as_deref(), Some("from_home_env"));
+    }
+
+    #[test]
+    fn test_load_config_explicit_env_beats_autoloaded_files() {
+        let _guard = TestEnvGuard::new();
+        let temp = TempDir::new().expect("tempdir");
+        let home = temp.path().join("home");
+        let cwd = temp.path().join("cwd");
+        std::fs::create_dir_all(&home).expect("create home");
+        std::fs::create_dir_all(&cwd).expect("create cwd");
+        std::fs::write(
+            home.join(".patents-mcp.env"),
+            "PATENT_SERPAPI_KEY=from_home_env\n",
+        )
+        .expect("write home env");
+        std::fs::write(cwd.join(".env"), "PATENT_SERPAPI_KEY=from_cwd_env\n")
+            .expect("write cwd env");
+
+        std::env::set_var("HOME", &home);
+        std::env::set_var("PATENT_SERPAPI_KEY", "from_explicit_env");
+        std::env::set_current_dir(&cwd).expect("set cwd");
+
+        let cfg = load_config().expect("load config");
+        assert_eq!(cfg.serpapi_key.as_deref(), Some("from_explicit_env"));
     }
 }

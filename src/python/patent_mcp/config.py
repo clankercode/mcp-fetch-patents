@@ -1,4 +1,5 @@
-"""Configuration system: env vars + TOML config file, XDG paths."""
+"""Configuration system: autoloaded env files + TOML + env vars."""
+
 from __future__ import annotations
 
 import os
@@ -20,6 +21,7 @@ else:
 # XDG helpers
 # ---------------------------------------------------------------------------
 
+
 def xdg_data_home() -> Path:
     """Return $XDG_DATA_HOME or ~/.local/share."""
     xdg = os.environ.get("XDG_DATA_HOME", "")
@@ -40,6 +42,7 @@ def default_local_cache() -> Path:
 # Config dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class PatentConfig:
     # Cache paths
@@ -47,20 +50,27 @@ class PatentConfig:
     cache_global_db: Path = field(default_factory=default_global_db)
 
     # Source behavior
-    source_priority: list[str] = field(default_factory=lambda: [
-        "USPTO", "EPO_OPS", "BigQuery", "Espacenet",
-        "WIPO_Scrape",
-        "IP_Australia", "CIPO",
-        "Google_Patents", "web_search",
-    ])
+    source_priority: list[str] = field(
+        default_factory=lambda: [
+            "USPTO",
+            "EPO_OPS",
+            "BigQuery",
+            "Espacenet",
+            "WIPO_Scrape",
+            "IP_Australia",
+            "CIPO",
+            "Google_Patents",
+            "web_search",
+        ]
+    )
     concurrency: int = 10
     fetch_all_sources: bool = True
     timeout: float = 30.0
 
     # Converter chain
-    converters_order: list[str] = field(default_factory=lambda: [
-        "pymupdf4llm", "pdfplumber", "pdftotext", "marker"
-    ])
+    converters_order: list[str] = field(
+        default_factory=lambda: ["pymupdf4llm", "pdfplumber", "pdftotext", "marker"]
+    )
     converters_disabled: list[str] = field(default_factory=lambda: ["marker"])
 
     # API keys (None = not configured)
@@ -192,10 +202,31 @@ def _apply_env(cfg: PatentConfig, env: dict[str, str]) -> None:
         cfg.log_level = v
 
 
-try:
-    from dotenv import load_dotenv
-except ImportError:  # pragma: no cover
-    def load_dotenv(*args, **kwargs): pass  # type: ignore[misc]
+def _load_env_file_if_present(path: Path) -> None:
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :]
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        os.environ[key] = value
+
+
+def _autoload_env_files() -> None:
+    _load_env_file_if_present(Path.home() / ".patents-mcp.env")
+    _load_env_file_if_present(Path(".env"))
 
 
 def load_config(
@@ -204,7 +235,7 @@ def load_config(
     overrides: dict[str, Any] | None = None,
 ) -> PatentConfig:
     """Load config: defaults → TOML files → env vars → overrides."""
-    load_dotenv()  # loads .env from cwd or parent dirs, no-op if not found
+    _autoload_env_files()
     cfg = PatentConfig()
 
     # 1. TOML files (lowest priority after defaults)
@@ -216,7 +247,10 @@ def load_config(
             _apply_toml(cfg, data)
 
     # 2. Environment variables
-    _apply_env(cfg, env if env is not None else dict(os.environ))
+    env_vars = dict(os.environ)
+    if env is not None:
+        env_vars.update(env)
+    _apply_env(cfg, env_vars)
 
     # 3. Programmatic overrides (tests)
     if overrides:
