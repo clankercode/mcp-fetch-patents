@@ -305,14 +305,13 @@ impl FetcherOrchestrator {
         let mut ordered = FuturesOrdered::new();
 
         for patent in patents {
-            let permit = sem.clone().acquire_owned().await.expect("semaphore closed");
+            let sem = sem.clone();
             let out_dir = output_base.join(&patent.canonical);
-            // We need to call fetch here and hold the future, but out_dir must
-            // live long enough. Since fetch borrows out_dir, we create the future
-            // inline within the async block.
             let patent_clone = patent.clone();
             ordered.push_back(async move {
-                // out_dir is moved into this block, so the borrow in fetch is valid
+                // Acquire permit inside the async block so FuturesOrdered can
+                // poll futures concurrently instead of blocking the for loop.
+                let permit = sem.acquire_owned().await.expect("semaphore closed");
                 let res = self.fetch(&patent_clone, &out_dir).await;
                 drop(permit);
                 res

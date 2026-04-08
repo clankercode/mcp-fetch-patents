@@ -95,7 +95,8 @@ fn fail_result(source: &str, error: &str) -> FetchResult {
 // ---------------------------------------------------------------------------
 
 /// PatentsView was shut down March 20, 2026. Returns helpful error.
-pub struct PatentsViewStubSource;
+#[allow(dead_code)] // used in tests
+pub(crate) struct PatentsViewStubSource;
 
 #[async_trait]
 impl PatentSource for PatentsViewStubSource {
@@ -1184,46 +1185,6 @@ impl PatentSource for EpoOpsSource {
 }
 
 // ---------------------------------------------------------------------------
-// Google Patents (browser — deferred to B07)
-// ---------------------------------------------------------------------------
-
-/// Google Patents — browser source stub (will be implemented in B07).
-pub struct GooglePatentsSource;
-
-#[async_trait]
-impl PatentSource for GooglePatentsSource {
-    fn source_name(&self) -> &str {
-        "Google_Patents"
-    }
-
-    fn supported_jurisdictions(&self) -> &[&str] {
-        &[] // supports all
-    }
-
-    async fn fetch(
-        &self,
-        _patent: &CanonicalPatentId,
-        _output_dir: &Path,
-        _config: &PatentConfig,
-    ) -> FetchResult {
-        FetchResult {
-            source_attempt: SourceAttempt {
-                source: "Google_Patents".into(),
-                success: false,
-                elapsed_ms: 0.0,
-                error: Some(
-                    "Browser source not yet implemented; will be added in B07".into(),
-                ),
-                metadata: None,
-            },
-            pdf_path: None,
-            txt_path: None,
-            metadata: None,
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // BigQuery (Python subprocess fallback)
 // ---------------------------------------------------------------------------
 
@@ -1259,10 +1220,19 @@ impl PatentSource for BigQuerySource {
             }
         };
 
-        // Build the query
+        // Build publication number for query — passed as argv to avoid injection
         let pub_number = format!("{}-{}", patent.jurisdiction, patent.number);
-        let query = format!(
-            r#"SELECT
+
+        // Python script reads project and pub_number from sys.argv to avoid
+        // SQL injection and Python code injection via string interpolation.
+        let script = r#"
+import json, sys
+try:
+    project = sys.argv[1]
+    pub_number = sys.argv[2]
+    from google.cloud import bigquery
+    client = bigquery.Client(project=project)
+    query = f"""SELECT
   publication_number,
   title_localized,
   abstract_localized,
@@ -1272,24 +1242,18 @@ impl PatentSource for BigQuerySource {
   publication_date,
   grant_date
 FROM `patents-public-data.patents.publications`
-WHERE publication_number LIKE '{}%'
-LIMIT 5"#,
-            pub_number
-        );
-
-        // Build inline Python script
-        let script = format!(
-            r#"
-import json, sys
-try:
-    from google.cloud import bigquery
-    client = bigquery.Client(project="{project}")
-    rows = list(client.query("""{query}""").result())
+WHERE publication_number LIKE @pub_number
+LIMIT 5"""
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[
+            bigquery.ScalarQueryParameter("pub_number", "STRING", pub_number + "%"),
+        ]
+    )
+    rows = list(client.query(query, job_config=job_config).result())
     if not rows:
-        print(json.dumps({{"error": "not_found"}}))
+        print(json.dumps({"error": "not_found"}))
         sys.exit(0)
     row = dict(rows[0])
-    # Convert non-serializable types
     for k, v in row.items():
         if hasattr(v, 'isoformat'):
             row[k] = v.isoformat()
@@ -1297,18 +1261,15 @@ try:
             row[k] = [dict(i) if hasattr(i, 'items') else i for i in v]
     print(json.dumps(row))
 except ImportError:
-    print(json.dumps({{"error": "google-cloud-bigquery not installed"}}))
+    print(json.dumps({"error": "google-cloud-bigquery not installed"}))
 except Exception as e:
-    print(json.dumps({{"error": str(e)}}))
-"#,
-            project = _project,
-            query = query
-        );
+    print(json.dumps({"error": str(e)}))
+"#;
 
-        // Run Python subprocess
+        // Run Python subprocess — project and pub_number passed as arguments
         let result = tokio::task::spawn_blocking(move || {
             std::process::Command::new("python3")
-                .args(["-c", &script])
+                .args(["-c", script, &_project, &pub_number])
                 .output()
         })
         .await;
@@ -1569,18 +1530,6 @@ mod tests {
         let ep_patent = crate::id_canon::canonicalize("EP1234567");
         assert!(source.can_fetch(&us_patent));
         assert!(!source.can_fetch(&ep_patent));
-    }
-
-    #[test]
-    fn test_google_patents_stub() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let source = GooglePatentsSource;
-            let patent = crate::id_canon::canonicalize("US7654321");
-            let config = test_config();
-            let result = source.fetch(&patent, Path::new("/tmp"), &config).await;
-            assert!(!result.source_attempt.success);
-        });
     }
 
     #[test]

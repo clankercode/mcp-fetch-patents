@@ -219,6 +219,10 @@ except Exception as e:
     /// Uses `reqwest::blocking::Client`.  Filename pattern: `fig{i:03}.{ext}`
     /// where `ext` comes from the URL suffix or defaults to `"png"`.
     /// On download failure the `ImageResult` is still emitted with `ocr_text = None`.
+    ///
+    /// # Panics
+    /// Will panic if called from within a tokio async runtime context.
+    /// Callers in async code must wrap this in `tokio::task::spawn_blocking`.
     pub fn download_images(&self, image_urls: &[String], output_dir: &Path) -> Vec<ImageResult> {
         if image_urls.is_empty() {
             return Vec::new();
@@ -474,7 +478,7 @@ except Exception as e:
         match status {
             Ok(s) if s.success() => Ok(ConversionResult {
                 success: true,
-                output_path: Some(out.to_path_buf()),
+                output_path: Some(txt_path),
                 converter_used: Some("pdftotext".into()),
                 error: None,
             }),
