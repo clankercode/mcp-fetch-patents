@@ -1,43 +1,59 @@
 # mcp-fetch-patents
 
-A single-responsibility MCP server that fetches patents by ID, caches them locally and globally, and returns file paths + metadata. Agents never wait for the same patent twice.
+**Give any AI agent instant access to the global patent corpus.**
 
-## Features
+One MCP tool call. Any patent ID format. PDF + Markdown + structured metadata back in seconds — or instantly from cache. Your agent never waits for the same patent twice.
 
-- **Fetch by ID** — any patent ID format: US, EP, WO, JP, CN, KR, AU, CA, NZ, BR, IN, and more
-- **Cache-first** — SQLite cache (per-repo `.patents/` + global XDG index); cache hit is instant
-- **Batch fetching** — pass 100+ patent IDs in a single MCP tool call
-- **Multiple sources** — USPTO PPUBS, EPO OPS, Espacenet scraping, WIPO, CIPO, IP Australia, web search fallback
-- **Format conversion** — PDF → Markdown (pymupdf4llm → pdfplumber → pdftotext); OCR figures via tesseract
-- **Dual implementation** — Python reference + Rust production mirror; parity validated by cross-impl tests
-- **MCP transport** — stdin/stdout only (v1); JSON-RPC 2.0
-
-## Quick Start
-
-### Python (reference implementation)
-
-```bash
-pip install patent-mcp-server
-# Add to Claude / Cursor / Cline MCP config:
-# command: python3 -m patent_mcp
+```
+"Fetch US7654321, EP1234567B1, and WO2024/123456"
+  → 3 PDFs, 3 Markdown files, 3 metadata objects, all cached for next time
 ```
 
-### Rust (production)
+---
+
+## Why this exists
+
+Patent data is scattered across dozens of national databases, each with its own API, format, and quirks. An agent doing patent analysis shouldn't have to figure out that a US patent lives on USPTO PPUBS, a European one needs EPO OPS OAuth2, and a PCT application requires scraping WIPO PatentScope. This server handles all of that behind a single interface.
+
+**9 patent sources, 1 tool call:**
+
+| Source | Coverage | Auth required? |
+|---|---|---|
+| USPTO PPUBS | US granted + applications | No (session-based) |
+| EPO OPS | EP, WO, 100+ offices via exchange data | Yes (OAuth2) |
+| Espacenet | EP + EPO member states | No (scraped) |
+| WIPO PatentScope | WO / PCT international | No (scraped) |
+| IP Australia | AU patents | No (REST API) |
+| CIPO | Canadian patents | No (scraped) |
+| Google Patents | All jurisdictions | No (Playwright) |
+| Google BigQuery | Bulk patent data | Yes (GCP credentials) |
+| Web search fallback | Anything missed | No (DuckDuckGo) / Optional (SerpAPI) |
+
+Sources are tried in priority order. First success wins (unless you set `PATENT_FETCH_ALL_SOURCES=true`). If all structured sources fail, web search finds the PDF anyway.
+
+## Quick start
+
+### Install
 
 ```bash
+# Python (reference implementation)
+pip install patent-mcp-server
+
+# Rust (production — thin cache proxy that delegates fetching to Python)
 cargo install patent-mcp-server
 # or build from source:
 cargo build --release --manifest-path src/rust/Cargo.toml
 ```
 
-### MCP Configuration (Claude Desktop / claude.json)
+### Configure your MCP client
+
+**Claude Desktop / Claude Code / Cursor / Cline:**
 
 ```json
 {
   "mcpServers": {
     "patents": {
-      "command": "python3",
-      "args": ["-m", "patent_mcp"],
+      "command": "patent-mcp-server",
       "env": {
         "PATENT_EPO_KEY": "your_client_id:your_client_secret"
       }
@@ -46,20 +62,33 @@ cargo build --release --manifest-path src/rust/Cargo.toml
 }
 ```
 
+No API keys? That's fine — USPTO, Espacenet, WIPO, IP Australia, CIPO, and DuckDuckGo all work without auth. Add keys later to unlock EPO OPS, BigQuery, and SerpAPI. See [docs/api-keys.md](docs/api-keys.md) for setup.
+
+### Use it
+
+Ask your agent to fetch patents. That's it.
+
+```
+"Fetch patents US7654321 and EP1234567B1, then summarize the key claims."
+```
+
+The agent calls `fetch_patents`, gets back file paths and metadata, reads the Markdown, and does its thing.
+
 ## Tools
 
 ### `fetch_patents`
 
-Fetch one or more patents by ID. Returns file paths and metadata.
+Fetch one or more patents by ID. Accepts any format — bare numbers, jurisdiction-prefixed, with kind codes, even Google Patents URLs.
 
-```json
-{
-  "patent_ids": ["US7654321", "EP1234567B1", "WO2024123456"],
-  "force_refresh": false
-}
-```
+**Parameters:**
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `patent_ids` | `string[]` | Yes | Patent IDs in any format |
+| `force_refresh` | `bool` | No | Bypass cache, re-fetch from sources |
+| `formats` | `string[]` | No | Requested formats (default: `["pdf", "txt", "md"]`) |
+| `postprocess_query` | `string` | No | Reserved for v2 post-processing |
 
-Returns:
+**Response:**
 ```json
 {
   "results": [
@@ -68,75 +97,122 @@ Returns:
       "success": true,
       "from_cache": false,
       "files": {
-        "pdf": "/path/.patents/US7654321/US7654321.pdf",
-        "md": "/path/.patents/US7654321/US7654321.md"
+        "pdf": ".patents/US7654321/US7654321.pdf",
+        "md": ".patents/US7654321/US7654321.md"
       },
       "metadata": {
-        "title": "...",
-        "inventors": ["..."],
-        "filing_date": "..."
-      }
+        "title": "Method and apparatus for ...",
+        "inventors": ["Jane Doe", "John Smith"],
+        "assignee": "Acme Corp",
+        "filing_date": "2005-03-15",
+        "publication_date": "2010-02-02",
+        "jurisdiction": "US",
+        "doc_type": "patent"
+      },
+      "sources": [
+        {"source": "USPTO", "success": true, "elapsed_ms": 1842}
+      ]
     }
   ],
-  "summary": {"total": 1, "success": 1, "cached": 0, "errors": 0}
+  "summary": {
+    "total": 1,
+    "success": 1,
+    "cached": 0,
+    "errors": 0,
+    "total_duration_ms": 2105
+  }
 }
 ```
 
 ### `list_cached_patents`
 
-List all patents in the local `.patents/` cache.
+List everything in the local `.patents/` cache. No parameters, returns `{patents: [...], count: N}`.
 
 ### `get_patent_metadata`
 
-Return cached metadata for patents (no network call).
+Cache-only metadata lookup — no network calls, instant response.
+
+**Parameters:** `patent_ids: string[]`
+**Returns:** `{results: [{patent_id, canonical_id, metadata}]}`
+
+## Patent ID formats
+
+Throw whatever you have at it. The canonicalizer handles all of these:
+
+| Input | Canonical form | Jurisdiction |
+|---|---|---|
+| `US7654321` | `US7654321` | US |
+| `US7654321B2` | `US7654321B2` | US (with kind code) |
+| `US20230001234A1` | `US20230001234A1` | US application |
+| `7654321` | `US7654321` | US (inferred) |
+| `EP1234567B1` | `EP1234567B1` | EP |
+| `WO2024/123456` | `WO2024123456` | International (PCT) |
+| `JP2023-123456` | `JP2023123456` | Japan |
+| `CN202310001234A` | `CN202310001234A` | China |
+| `KR10-1234567` | `KR101234567` | South Korea |
+| `AU2023123456` | `AU2023123456` | Australia |
+| `CA3123456` | `CA3123456` | Canada |
+| `https://patents.google.com/patent/US7654321/en` | `US7654321` | (extracted) |
+
+Also supports NZ, BR, and IN formats.
+
+## How it works
+
+```
+Agent                MCP Server (Rust)              Python Backend
+  │                       │                              │
+  ├─ fetch_patents ──────►│                              │
+  │                       ├─ cache lookup (SQLite) ──►   │
+  │                       │   HIT? return immediately    │
+  │                       │   MISS? ─────────────────────►│
+  │                       │                              ├─ try sources in priority order
+  │                       │                              │   USPTO → EPO → Espacenet → ...
+  │                       │                              ├─ download PDF
+  │                       │                              ├─ convert PDF → Markdown
+  │                       │                              │   (pymupdf4llm → pdfplumber → pdftotext)
+  │                       │                              ├─ extract metadata
+  │                       │◄─────────────────────────────┤
+  │                       ├─ store in cache              │
+  │◄──────────────────────┤                              │
+  │   files + metadata    │                              │
+```
+
+**Cache architecture:** Two-layer SQLite — local `.patents/index.db` per repo + global `~/.local/share/patent-cache/index.db` (XDG). Files live in `.patents/{CANONICAL_ID}/`. Second fetch of the same patent is instant.
+
+**PDF → Markdown pipeline:** Four converter backends tried in order (pymupdf4llm → pdfplumber → pdftotext → marker). Tables extracted and merged. OCR via tesseract for scanned figures.
+
+**Dual implementation:** Python is the reference implementation with all source fetchers, converters, and the full orchestrator. Rust is the production server — a thin, fast cache proxy that delegates to Python on cache miss. Cross-implementation parity tests ensure they stay in sync.
 
 ## Configuration
 
-Config is loaded from `~/.patents.toml` (overridden by env vars):
+All config via `~/.patents.toml` or environment variables (env vars take precedence):
 
 | Env var | Default | Description |
 |---|---|---|
 | `PATENT_CACHE_DIR` | `.patents/` | Local cache directory |
 | `PATENT_CONCURRENCY` | `5` | Max concurrent fetches |
-| `PATENT_TIMEOUT_SECS` | `30.0` | HTTP timeout |
-| `PATENT_EPO_KEY` | — | `client_id:client_secret` for EPO OPS |
+| `PATENT_TIMEOUT` | `30.0` | HTTP timeout (seconds) |
+| `PATENT_EPO_KEY` | — | EPO OPS `client_id:client_secret` |
 | `PATENT_LENS_KEY` | — | Lens.org API key |
 | `PATENT_SERPAPI_KEY` | — | SerpAPI key (web search fallback) |
-| `PATENT_FETCH_ALL_SOURCES` | `false` | Try all sources even after success |
-
-See [docs/api-keys.md](docs/api-keys.md) for how to obtain API keys for each source.
-
-## Supported Patent ID Formats
-
-| Format | Example | Jurisdiction |
-|---|---|---|
-| US granted | `US7654321` | United States |
-| US application | `US20230001234A1` | United States |
-| EP | `EP1234567B1` | European Patent Office |
-| WO (WIPO) | `WO2024/123456` | International |
-| JP | `JP2023-123456` | Japan |
-| CN | `CN202310001234A` | China |
-| KR | `KR10-1234567` | South Korea |
-| AU | `AU2023123456` | Australia |
-| CA | `CA3123456` | Canada |
-| NZ | `NZ123456` | New Zealand |
-| Google Patents URL | `https://patents.google.com/patent/US7654321/en` | Any |
+| `PATENT_BIGQUERY_PROJECT` | — | GCP project for BigQuery source |
+| `PATENT_FETCH_ALL_SOURCES` | `false` | Try all sources even after first success |
 
 ## Development
 
 ### Running tests
 
 ```bash
-# Python unit tests (fast, all I/O mocked)
+# Fast Python unit tests (<1s, all I/O mocked)
 pytest tests/python/ -m "not browser and not integration and not slow"
 
-# All Python tests including fuzz + slow
+# Full suite (includes fuzz tests via Hypothesis, slow tests)
 pytest tests/python/
 
-# Rust unit tests
+# Rust tests
 cargo test --manifest-path src/rust/Cargo.toml
 
-# Cross-implementation parity tests (requires Rust binary built)
+# Cross-implementation parity (Python == Rust, requires built Rust binary)
 pytest tests/cross_impl/
 ```
 
@@ -144,32 +220,28 @@ pytest tests/cross_impl/
 
 ```
 src/
-  python/patent_mcp/    # Python reference implementation
-    id_canon.py         # Patent ID canonicalization
-    cache.py            # SQLite cache (local + global XDG)
-    config.py           # Configuration loading
-    fetchers/           # Patent source fetchers
-      http.py           # PPUBS, EPO OPS, Espacenet, WIPO, ...
-      web_search.py     # Web search fallback
-      orchestrator.py   # Source priority orchestration
-    converters/         # PDF → Markdown pipeline
-    server.py           # MCP server (FastMCP)
-  rust/                 # Rust production mirror
+  python/patent_mcp/       # Python reference implementation
+    id_canon.py            #   Patent ID canonicalization (22+ formats)
+    cache.py               #   Dual-layer SQLite cache
+    config.py              #   TOML + env var config loading
+    fetchers/
+      http.py              #   All HTTP/API source implementations
+      web_search.py        #   DuckDuckGo / SerpAPI fallback
+      orchestrator.py      #   Priority-ordered source orchestration
+    converters/            #   PDF → Markdown (4 backends + OCR)
+    server.py              #   MCP server (FastMCP, stdin/stdout)
+  rust/                    # Rust production server
     src/
-      id_canon/         # Patent ID canonicalization
-      cache/            # SQLite cache
-      config/           # Configuration
-      fetchers/         # Orchestrator (delegates to Python on miss)
-      converters/       # Delegates to Python subprocess
-      server/           # MCP JSON-RPC server
+      id_canon/            #   Canonicalization (must match Python)
+      cache/               #   SQLite cache (rusqlite)
+      fetchers/            #   Cache-first, delegates to Python on miss
+      server/              #   JSON-RPC 2.0 over stdin/stdout
 tests/
-  python/               # Python unit + integration tests
-  rust/                 # Rust integration tests
-  cross_impl/           # Python == Rust parity tests
-  fixtures/             # Shared test data
+  python/                  # 16 test files: unit, integration, fuzz
+  cross_impl/              # Python == Rust parity tests
+  fixtures/                # Shared test data
 docs/
-  api-keys.md           # API key setup guide
-  ultra-plans/          # Implementation plan tree
+  api-keys.md              # API key setup for each source
 ```
 
 ## License
