@@ -4,6 +4,8 @@
 
 One MCP tool call. Any patent ID format. PDF + Markdown + structured metadata back in seconds — or instantly from cache. Your agent never waits for the same patent twice.
 
+Built in Rust for speed. 9 patent sources. 4 PDF converters. Two-layer SQLite cache. Zero configuration required.
+
 ```
 "Fetch US7654321, EP1234567B1, and WO2024/123456"
   → 3 PDFs, 3 Markdown files, 3 metadata objects, all cached for next time
@@ -36,13 +38,13 @@ Sources are tried in priority order. First success wins (unless you set `PATENT_
 ### Install
 
 ```bash
-# Python (reference implementation)
-pip install patent-mcp-server
-
-# Rust (production — thin cache proxy that delegates fetching to Python)
+# Rust (recommended — standalone, fast)
 cargo install patent-mcp-server
 # or build from source:
 cargo build --release --manifest-path src/rust/Cargo.toml
+
+# Python (reference implementation)
+pip install patent-mcp-server
 ```
 
 ### Configure your MCP client
@@ -159,29 +161,28 @@ Also supports NZ, BR, and IN formats.
 ## How it works
 
 ```
-Agent                MCP Server (Rust)              Python Backend
-  │                       │                              │
-  ├─ fetch_patents ──────►│                              │
-  │                       ├─ cache lookup (SQLite) ──►   │
-  │                       │   HIT? return immediately    │
-  │                       │   MISS? ─────────────────────►│
-  │                       │                              ├─ try sources in priority order
-  │                       │                              │   USPTO → EPO → Espacenet → ...
-  │                       │                              ├─ download PDF
-  │                       │                              ├─ convert PDF → Markdown
-  │                       │                              │   (pymupdf4llm → pdfplumber → pdftotext)
-  │                       │                              ├─ extract metadata
-  │                       │◄─────────────────────────────┤
-  │                       ├─ store in cache              │
-  │◄──────────────────────┤                              │
-  │   files + metadata    │                              │
+Agent                    MCP Server (Rust)
+  │                           │
+  ├─ fetch_patents ──────────►│
+  │                           ├─ cache lookup (SQLite)
+  │                           │   HIT? return immediately
+  │                           │   MISS?
+  │                           │     ├─ try sources in priority order
+  │                           │     │   USPTO → EPO → Espacenet → WIPO → ...
+  │                           │     ├─ download PDF (async, concurrent)
+  │                           │     ├─ convert PDF → Markdown
+  │                           │     │   (pymupdf4llm → pdfplumber → pdftotext → marker)
+  │                           │     ├─ extract metadata
+  │                           │     └─ store in cache
+  │◄──────────────────────────┤
+  │   files + metadata        │
 ```
 
 **Cache architecture:** Two-layer SQLite — local `.patents/index.db` per repo + global `~/.local/share/patent-cache/index.db` (XDG). Files live in `.patents/{CANONICAL_ID}/`. Second fetch of the same patent is instant.
 
 **PDF → Markdown pipeline:** Four converter backends tried in order (pymupdf4llm → pdfplumber → pdftotext → marker). Tables extracted and merged. OCR via tesseract for scanned figures.
 
-**Dual implementation:** Python is the reference implementation with all source fetchers, converters, and the full orchestrator. Rust is the production server — a thin, fast cache proxy that delegates to Python on cache miss. Cross-implementation parity tests ensure they stay in sync.
+**Dual implementation:** Rust is the production server — standalone, fast, with native async HTTP fetchers, retry logic, and a full source orchestrator. Python is the reference implementation used for cross-implementation parity testing. Both implementations pass 100+ tests; 32 cross-impl parity tests verify they produce identical results for ID canonicalization, source ordering, converter output, and web search queries.
 
 ## Configuration
 
@@ -203,16 +204,16 @@ All config via `~/.patents.toml` or environment variables (env vars take precede
 ### Running tests
 
 ```bash
+# Rust tests (74 tests, <0.1s)
+cargo test --manifest-path src/rust/Cargo.toml
+
 # Fast Python unit tests (<1s, all I/O mocked)
 pytest tests/python/ -m "not browser and not integration and not slow"
 
-# Full suite (includes fuzz tests via Hypothesis, slow tests)
+# Full Python suite (includes fuzz tests via Hypothesis, slow tests)
 pytest tests/python/
 
-# Rust tests
-cargo test --manifest-path src/rust/Cargo.toml
-
-# Cross-implementation parity (Python == Rust, requires built Rust binary)
+# Cross-implementation parity — verifies Python == Rust (32 tests)
 pytest tests/cross_impl/
 ```
 
@@ -230,11 +231,17 @@ src/
       orchestrator.py      #   Priority-ordered source orchestration
     converters/            #   PDF → Markdown (4 backends + OCR)
     server.py              #   MCP server (FastMCP, stdin/stdout)
-  rust/                    # Rust production server
+  rust/                    # Rust production server (standalone)
     src/
       id_canon/            #   Canonicalization (must match Python)
-      cache/               #   SQLite cache (rusqlite)
-      fetchers/            #   Cache-first, delegates to Python on miss
+      cache/               #   Two-layer SQLite cache (rusqlite)
+      config/              #   TOML + env var config loading
+      converters/          #   PDF → Markdown (4 backends + OCR)
+      fetchers/
+        http/              #   9 native async HTTP sources with retry
+        web_search/        #   DuckDuckGo + SerpAPI fallback
+        browser.rs         #   Playwright-based Google Patents scraper
+        mod.rs             #   Priority-ordered source orchestrator
       server/              #   JSON-RPC 2.0 over stdin/stdout
 tests/
   python/                  # 16 test files: unit, integration, fuzz
