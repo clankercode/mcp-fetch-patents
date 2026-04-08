@@ -1,0 +1,16 @@
+{
+  "patents": [
+    {
+      "patentNumber": "US7654321",
+      "guid": "test-guid-7654321",
+      "title": "Widget Assembly Method",
+      "abstract": "A method for assembling widgets using automated machinery.",
+      "inventors": ["Alice Smith", "Bob Jones"],
+      "assignee": "Widget Corp",
+      "filingDate": "2005-03-15",
+      "publicationDate": "2010-02-02",
+      "grantDate": "2010-02-02",
+      "fullText": "CLAIMS: 1. A widget assembly method comprising..."
+    }
+  ]
+}

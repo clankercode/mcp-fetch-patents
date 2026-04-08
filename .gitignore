@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.env
+*.env
+
+# Rust
+target/
+Cargo.lock
+
+# Patent cache
+.patents/
+*.db
+
+# Test artifacts
+.pytest_cache/
+.hypothesis/
+htmlcov/
+.coverage
+coverage.xml
+
+# Secrets
+.patent-credentials
+
+# Tool / runtime state
+.opencode/
+.goal-loops/
+.playwright-mcp/
+.claude/
+artifacts/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store

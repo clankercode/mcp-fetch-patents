@@ -1,0 +1,11 @@
+{
+  "canonical_id": "US7654321",
+  "jurisdiction": "US",
+  "doc_type": "patent",
+  "title": "Widget Assembly Method",
+  "abstract": "A method for assembling widgets using automated machinery.",
+  "inventors": ["Alice Smith", "Bob Jones"],
+  "assignee": "Widget Corp",
+  "filing_date": "2005-03-15",
+  "publication_date": "2010-02-02"
+}

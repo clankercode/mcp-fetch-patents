@@ -1,0 +1,87 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  python:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install hatch
+          pip install -e "src/python[dev]"
+
+      - name: Run fast unit tests
+        run: |
+          cd src/python
+          pytest ../../tests/python/ -m "not browser and not integration and not slow" -q --tb=short
+        env:
+          PYTHONPATH: src/python
+
+      - name: Run slow + fuzz tests
+        run: |
+          pytest tests/python/ -q --tb=short
+        env:
+          PYTHONPATH: src/python
+
+  rust:
+    name: Rust tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src/rust -> target"
+
+      - name: Build
+        run: cargo build --manifest-path src/rust/Cargo.toml
+
+      - name: Test
+        run: cargo test --manifest-path src/rust/Cargo.toml
+
+  cross-impl:
+    name: Cross-implementation parity tests
+    runs-on: ubuntu-latest
+    needs: [python, rust]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install -e "src/python[dev]"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src/rust -> target"
+
+      - name: Build Rust binary
+        run: cargo build --manifest-path src/rust/Cargo.toml
+
+      - name: Run parity tests
+        run: pytest tests/cross_impl/ -v --tb=short
+        env:
+          PYTHONPATH: src/python

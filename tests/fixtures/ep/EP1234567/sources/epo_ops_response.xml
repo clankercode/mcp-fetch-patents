@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ops:world-patent-data xmlns:ops="http://ops.epo.org/3.2" xmlns:exchange="http://www.epo.org/exchange">
+  <ops:exchange-documents>
+    <ops:exchange-document country="EP" doc-number="1234567" kind="B1" family-id="12345">
+      <exchange:bibliographic-data>
+        <exchange:invention-title lang="en">Improved Gear Mechanism</exchange:invention-title>
+        <exchange:abstract lang="en">
+          <exchange:p>An improved gear mechanism for reducing friction in rotating systems.</exchange:p>
+        </exchange:abstract>
+        <exchange:parties>
+          <exchange:inventors>
+            <exchange:inventor sequence="1">
+              <exchange:inventor-name><exchange:name>Mueller, Hans</exchange:name></exchange:inventor-name>
+            </exchange:inventor>
+          </exchange:inventors>
+          <exchange:assignees>
+            <exchange:assignee><exchange:assignee-name><exchange:name>GearTech GmbH</exchange:name></exchange:assignee-name></exchange:assignee>
+          </exchange:assignees>
+        </exchange:parties>
+        <exchange:application-reference doc-id="EP20050001234">
+          <exchange:document-id>
+            <exchange:country>EP</exchange:country>
+            <exchange:doc-number>05001234</exchange:doc-number>
+            <exchange:date>20050115</exchange:date>
+          </exchange:document-id>
+        </exchange:application-reference>
+        <exchange:publication-reference>
+          <exchange:document-id>
+            <exchange:country>EP</exchange:country>
+            <exchange:doc-number>1234567</exchange:doc-number>
+            <exchange:kind>B1</exchange:kind>
+            <exchange:date>20091201</exchange:date>
+          </exchange:document-id>
+        </exchange:publication-reference>
+      </exchange:bibliographic-data>
+    </ops:exchange-document>
+  </ops:exchange-documents>
+</ops:world-patent-data>

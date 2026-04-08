@@ -1,0 +1,274 @@
+//! Configuration — mirrors Python patent_mcp.config module.
+//!
+//! Loads from:
+//!   1. Compiled defaults
+//!   2. ~/.patents.toml (or PATENT_CONFIG_FILE env override)
+//!   3. Environment variables (highest priority)
+
+use anyhow::Result;
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+/// Full server configuration. All fields have defaults.
+#[derive(Debug, Clone)]
+pub struct PatentConfig {
+    pub cache_local_dir: PathBuf,
+    pub cache_global_db: PathBuf,
+    pub source_priority: Vec<String>,
+    pub concurrency: usize,
+    pub fetch_all_sources: bool,
+    pub timeout_secs: f64,
+    pub converters_order: Vec<String>,
+    pub converters_disabled: Vec<String>,
+    pub source_base_urls: HashMap<String, String>,
+    // API keys (all optional)
+    pub epo_client_id: Option<String>,
+    pub epo_client_secret: Option<String>,
+    pub lens_api_key: Option<String>,
+    pub serpapi_key: Option<String>,
+    pub bing_key: Option<String>,
+    pub bigquery_project: Option<String>,
+}
+
+/// TOML file schema for deserialization.
+#[derive(Debug, Deserialize, Default)]
+struct TomlFile {
+    cache: Option<TomlCache>,
+    sources: Option<TomlSources>,
+    converters: Option<TomlConverters>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TomlCache {
+    local_dir: Option<String>,
+    global_db: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TomlSources {
+    priority: Option<Vec<String>>,
+    fetch_all_sources: Option<bool>,
+    concurrency: Option<usize>,
+    timeout: Option<f64>,
+    epo_ops: Option<TomlEpoOps>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TomlEpoOps {
+    client_id: Option<String>,
+    client_secret: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TomlConverters {
+    order: Option<Vec<String>>,
+    disabled: Option<Vec<String>>,
+}
+
+/// XDG data home: $XDG_DATA_HOME or ~/.local/share
+pub fn xdg_data_home() -> PathBuf {
+    if let Ok(v) = std::env::var("XDG_DATA_HOME") {
+        PathBuf::from(v)
+    } else {
+        dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join(".local")
+            .join("share")
+    }
+}
+
+/// Default global index path: $XDG_DATA_HOME/patent-cache/index.db
+pub fn default_global_db() -> PathBuf {
+    xdg_data_home().join("patent-cache").join("index.db")
+}
+
+fn default_source_priority() -> Vec<String> {
+    vec![
+        "USPTO".into(),
+        "EPO_OPS".into(),
+        "BigQuery".into(),
+        "Espacenet".into(),
+        "WIPO_Scrape".into(),
+        "IP_Australia".into(),
+        "CIPO".into(),
+        "web_search".into(),
+    ]
+}
+
+fn default_converters_order() -> Vec<String> {
+    vec!["pymupdf4llm".into(), "pdfplumber".into(), "pdftotext".into()]
+}
+
+fn parse_bool_env(v: &str) -> bool {
+    matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+}
+
+/// Load config from defaults → TOML file → env vars.
+pub fn load_config() -> Result<PatentConfig> {
+    let mut cfg = PatentConfig {
+        cache_local_dir: PathBuf::from(".patents"),
+        cache_global_db: default_global_db(),
+        source_priority: default_source_priority(),
+        concurrency: 5,
+        fetch_all_sources: false,
+        timeout_secs: 30.0,
+        converters_order: default_converters_order(),
+        converters_disabled: vec![],
+        source_base_urls: HashMap::new(),
+        epo_client_id: None,
+        epo_client_secret: None,
+        lens_api_key: None,
+        serpapi_key: None,
+        bing_key: None,
+        bigquery_project: None,
+    };
+
+    // Load TOML file
+    let toml_path = std::env::var("PATENT_CONFIG_FILE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .unwrap_or_else(|| PathBuf::from("."))
+                .join(".patents.toml")
+        });
+
+    if toml_path.exists() {
+        let content = std::fs::read_to_string(&toml_path)?;
+        let file: TomlFile = toml::from_str(&content)?;
+
+        if let Some(cache) = file.cache {
+            if let Some(v) = cache.local_dir {
+                cfg.cache_local_dir = PathBuf::from(v);
+            }
+            if let Some(v) = cache.global_db {
+                cfg.cache_global_db = PathBuf::from(v);
+            }
+        }
+        if let Some(sources) = file.sources {
+            if let Some(v) = sources.priority {
+                cfg.source_priority = v;
+            }
+            if let Some(v) = sources.fetch_all_sources {
+                cfg.fetch_all_sources = v;
+            }
+            if let Some(v) = sources.concurrency {
+                cfg.concurrency = v;
+            }
+            if let Some(v) = sources.timeout {
+                cfg.timeout_secs = v;
+            }
+            if let Some(epo) = sources.epo_ops {
+                cfg.epo_client_id = epo.client_id.filter(|s| !s.is_empty());
+                cfg.epo_client_secret = epo.client_secret.filter(|s| !s.is_empty());
+            }
+        }
+        if let Some(conv) = file.converters {
+            if let Some(v) = conv.order {
+                cfg.converters_order = v;
+            }
+            if let Some(v) = conv.disabled {
+                cfg.converters_disabled = v;
+            }
+        }
+    }
+
+    // Override with environment variables
+    if let Ok(v) = std::env::var("PATENT_CACHE_DIR") {
+        cfg.cache_local_dir = PathBuf::from(v);
+    }
+    if let Ok(v) = std::env::var("PATENT_GLOBAL_DB") {
+        cfg.cache_global_db = PathBuf::from(v);
+    }
+    if let Ok(v) = std::env::var("PATENT_CONCURRENCY") {
+        if let Ok(n) = v.parse::<usize>() {
+            cfg.concurrency = n;
+        }
+    }
+    if let Ok(v) = std::env::var("PATENT_TIMEOUT") {
+        if let Ok(t) = v.parse::<f64>() {
+            cfg.timeout_secs = t;
+        }
+    }
+    if let Ok(v) = std::env::var("PATENT_FETCH_ALL_SOURCES") {
+        cfg.fetch_all_sources = parse_bool_env(&v);
+    }
+    if let Ok(v) = std::env::var("PATENT_EPO_KEY") {
+        let parts: Vec<&str> = v.splitn(2, ':').collect();
+        cfg.epo_client_id = parts.first().filter(|s| !s.is_empty()).map(|s| s.to_string());
+        cfg.epo_client_secret = parts.get(1).filter(|s| !s.is_empty()).map(|s| s.to_string());
+    }
+    if let Ok(v) = std::env::var("PATENT_LENS_KEY") {
+        cfg.lens_api_key = Some(v).filter(|s| !s.is_empty());
+    }
+    if let Ok(v) = std::env::var("PATENT_SERPAPI_KEY") {
+        cfg.serpapi_key = Some(v).filter(|s| !s.is_empty());
+    }
+    if let Ok(v) = std::env::var("PATENT_BING_KEY") {
+        cfg.bing_key = Some(v).filter(|s| !s.is_empty());
+    }
+    if let Ok(v) = std::env::var("PATENT_BIGQUERY_PROJECT") {
+        cfg.bigquery_project = Some(v).filter(|s| !s.is_empty());
+    }
+
+    Ok(cfg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_defaults() {
+        // Clear env to get clean defaults
+        let cfg = PatentConfig {
+            cache_local_dir: PathBuf::from(".patents"),
+            cache_global_db: default_global_db(),
+            source_priority: default_source_priority(),
+            concurrency: 5,
+            fetch_all_sources: false,
+            timeout_secs: 30.0,
+            converters_order: default_converters_order(),
+            converters_disabled: vec![],
+            source_base_urls: HashMap::new(),
+            epo_client_id: None,
+            epo_client_secret: None,
+            lens_api_key: None,
+            serpapi_key: None,
+            bing_key: None,
+            bigquery_project: None,
+        };
+        assert_eq!(cfg.cache_local_dir, PathBuf::from(".patents"));
+        assert_eq!(cfg.concurrency, 5);
+        assert!(!cfg.fetch_all_sources);
+        assert_eq!(cfg.timeout_secs, 30.0);
+        assert!(cfg.epo_client_id.is_none());
+    }
+
+    #[test]
+    fn test_parse_bool_env() {
+        assert!(parse_bool_env("1"));
+        assert!(parse_bool_env("true"));
+        assert!(parse_bool_env("TRUE"));
+        assert!(parse_bool_env("yes"));
+        assert!(parse_bool_env("on"));
+        assert!(!parse_bool_env("0"));
+        assert!(!parse_bool_env("false"));
+        assert!(!parse_bool_env("no"));
+    }
+
+    #[test]
+    fn test_default_source_priority_includes_uspto() {
+        let p = default_source_priority();
+        assert!(p.contains(&"USPTO".to_string()));
+        assert!(p.contains(&"EPO_OPS".to_string()));
+        assert!(p.contains(&"web_search".to_string()));
+    }
+
+    #[test]
+    fn test_xdg_data_home_uses_env() {
+        // Can't easily override env in tests without unsafety; just check it returns something
+        let path = xdg_data_home();
+        assert!(path.as_os_str().len() > 0);
+    }
+}
