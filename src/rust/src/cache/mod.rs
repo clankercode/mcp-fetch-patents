@@ -194,6 +194,7 @@ impl Default for SessionCache {
 pub struct PatentCache {
     local_dir: PathBuf,
     local_db: PathBuf,
+    #[allow(dead_code)]
     global_db: PathBuf,
 }
 
@@ -277,7 +278,7 @@ impl PatentCache {
         };
 
         let (cid, jur, doc_type, title, abs, inventors_json, assignee, filing, pub_date,
-             grant, fetched_at, legal_status, status_fetched_at, cache_dir) = match row {
+             grant, fetched_at, legal_status, _status_fetched_at, cache_dir) = match row {
             None => return Ok(None),
             Some(r) => r,
         };

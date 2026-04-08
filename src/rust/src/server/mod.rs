@@ -5,7 +5,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::io::{BufRead, Write};
+use std::io::Write;
 
 use crate::config::PatentConfig;
 
@@ -15,6 +15,7 @@ use crate::config::PatentConfig;
 
 #[derive(Debug, Deserialize)]
 struct RpcRequest {
+    #[allow(dead_code)]
     jsonrpc: String,
     id: Option<Value>,
     method: String,
