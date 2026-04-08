@@ -500,7 +500,7 @@ mod tests {
     fn test_cache_init() {
         let tmp = TempDir::new().unwrap();
         let cfg = make_config(&tmp);
-        let cache = PatentCache::new(&cfg).unwrap();
+        let _cache = PatentCache::new(&cfg).unwrap();
         assert!(cfg.cache_local_dir.join("index.db").exists());
     }
 

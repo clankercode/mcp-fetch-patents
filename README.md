@@ -142,14 +142,14 @@ Throw whatever you have at it. The canonicalizer handles all of these:
 | Input | Canonical form | Jurisdiction |
 |---|---|---|
 | `US7654321` | `US7654321` | US |
-| `US7654321B2` | `US7654321B2` | US (with kind code) |
-| `US20230001234A1` | `US20230001234A1` | US application |
+| `US7654321B2` | `US7654321` | US (with kind code) |
+| `US20230001234A1` | `US20230001234` | US application |
 | `7654321` | `US7654321` | US (inferred) |
-| `EP1234567B1` | `EP1234567B1` | EP |
-| `WO2024/123456` | `WO2024123456` | International (PCT) |
+| `EP1234567B1` | `EP1234567` | EP |
+| `WO2024/123456` | `WO2024/123456` | International (PCT) |
 | `JP2023-123456` | `JP2023123456` | Japan |
-| `CN202310001234A` | `CN202310001234A` | China |
-| `KR10-1234567` | `KR101234567` | South Korea |
+| `CN202310001234A` | `CN202310001234` | China |
+| `KR10-1234567` | `KR10-1234567` | South Korea |
 | `AU2023123456` | `AU2023123456` | Australia |
 | `CA3123456` | `CA3123456` | Canada |
 | `https://patents.google.com/patent/US7654321/en` | `US7654321` | (extracted) |

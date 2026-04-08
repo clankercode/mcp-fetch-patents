@@ -50,7 +50,7 @@ struct TomlSources {
     priority: Option<Vec<String>>,
     fetch_all_sources: Option<bool>,
     concurrency: Option<usize>,
-    timeout: Option<f64>,
+    timeout_seconds: Option<f64>,    // matches Python
     epo_ops: Option<TomlEpoOps>,
 }
 
@@ -62,8 +62,8 @@ struct TomlEpoOps {
 
 #[derive(Debug, Deserialize, Default)]
 struct TomlConverters {
-    order: Option<Vec<String>>,
-    disabled: Option<Vec<String>>,
+    pdf_to_markdown_order: Option<Vec<String>>,  // matches Python
+    disable: Option<Vec<String>>,                 // matches Python
 }
 
 /// XDG data home: $XDG_DATA_HOME or ~/.local/share
@@ -92,12 +92,13 @@ fn default_source_priority() -> Vec<String> {
         "WIPO_Scrape".into(),
         "IP_Australia".into(),
         "CIPO".into(),
+        "Google_Patents".into(),
         "web_search".into(),
     ]
 }
 
 fn default_converters_order() -> Vec<String> {
-    vec!["pymupdf4llm".into(), "pdfplumber".into(), "pdftotext".into()]
+    vec!["pymupdf4llm".into(), "pdfplumber".into(), "pdftotext".into(), "marker".into()]
 }
 
 fn parse_bool_env(v: &str) -> bool {
@@ -110,11 +111,11 @@ pub fn load_config() -> Result<PatentConfig> {
         cache_local_dir: PathBuf::from(".patents"),
         cache_global_db: default_global_db(),
         source_priority: default_source_priority(),
-        concurrency: 5,
-        fetch_all_sources: false,
+        concurrency: 10,
+        fetch_all_sources: true,
         timeout_secs: 30.0,
         converters_order: default_converters_order(),
-        converters_disabled: vec![],
+        converters_disabled: vec!["marker".into()],
         source_base_urls: HashMap::new(),
         epo_client_id: None,
         epo_client_secret: None,
@@ -124,13 +125,18 @@ pub fn load_config() -> Result<PatentConfig> {
         bigquery_project: None,
     };
 
-    // Load TOML file
+    // Load TOML file — check CWD first, then home dir (matches Python behavior)
     let toml_path = std::env::var("PATENT_CONFIG_FILE")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            dirs::home_dir()
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".patents.toml")
+            let cwd_config = PathBuf::from(".patents.toml");
+            if cwd_config.exists() {
+                cwd_config
+            } else {
+                dirs::home_dir()
+                    .unwrap_or_else(|| PathBuf::from("."))
+                    .join(".patents.toml")
+            }
         });
 
     if toml_path.exists() {
@@ -155,7 +161,7 @@ pub fn load_config() -> Result<PatentConfig> {
             if let Some(v) = sources.concurrency {
                 cfg.concurrency = v;
             }
-            if let Some(v) = sources.timeout {
+            if let Some(v) = sources.timeout_seconds {
                 cfg.timeout_secs = v;
             }
             if let Some(epo) = sources.epo_ops {
@@ -164,10 +170,10 @@ pub fn load_config() -> Result<PatentConfig> {
             }
         }
         if let Some(conv) = file.converters {
-            if let Some(v) = conv.order {
+            if let Some(v) = conv.pdf_to_markdown_order {
                 cfg.converters_order = v;
             }
-            if let Some(v) = conv.disabled {
+            if let Some(v) = conv.disable {
                 cfg.converters_disabled = v;
             }
         }
@@ -220,16 +226,26 @@ mod tests {
 
     #[test]
     fn test_defaults() {
-        // Clear env to get clean defaults
+        // Verify default helper functions match Python reference values
+        let p = default_source_priority();
+        assert!(p.contains(&"USPTO".to_string()));
+        assert!(p.contains(&"Google_Patents".to_string()));
+        assert!(p.contains(&"web_search".to_string()));
+
+        let c = default_converters_order();
+        assert!(c.contains(&"pymupdf4llm".to_string()));
+        assert!(c.contains(&"marker".to_string()));
+
+        // Verify that PatentConfig with correct Python-parity defaults assembles cleanly
         let cfg = PatentConfig {
             cache_local_dir: PathBuf::from(".patents"),
             cache_global_db: default_global_db(),
             source_priority: default_source_priority(),
-            concurrency: 5,
-            fetch_all_sources: false,
+            concurrency: 10,
+            fetch_all_sources: true,
             timeout_secs: 30.0,
             converters_order: default_converters_order(),
-            converters_disabled: vec![],
+            converters_disabled: vec!["marker".to_string()],
             source_base_urls: HashMap::new(),
             epo_client_id: None,
             epo_client_secret: None,
@@ -239,9 +255,10 @@ mod tests {
             bigquery_project: None,
         };
         assert_eq!(cfg.cache_local_dir, PathBuf::from(".patents"));
-        assert_eq!(cfg.concurrency, 5);
-        assert!(!cfg.fetch_all_sources);
+        assert_eq!(cfg.concurrency, 10);
+        assert!(cfg.fetch_all_sources);
         assert_eq!(cfg.timeout_secs, 30.0);
+        assert_eq!(cfg.converters_disabled, vec!["marker".to_string()]);
         assert!(cfg.epo_client_id.is_none());
     }
 
@@ -262,6 +279,7 @@ mod tests {
         let p = default_source_priority();
         assert!(p.contains(&"USPTO".to_string()));
         assert!(p.contains(&"EPO_OPS".to_string()));
+        assert!(p.contains(&"Google_Patents".to_string()));
         assert!(p.contains(&"web_search".to_string()));
     }
 
@@ -269,6 +287,6 @@ mod tests {
     fn test_xdg_data_home_uses_env() {
         // Can't easily override env in tests without unsafety; just check it returns something
         let path = xdg_data_home();
-        assert!(path.as_os_str().len() > 0);
+        assert!(!path.as_os_str().is_empty());
     }
 }

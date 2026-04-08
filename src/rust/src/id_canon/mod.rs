@@ -184,9 +184,14 @@ pub fn canonicalize(raw: &str) -> CanonicalPatentId {
     }
 
     // Fallback: unparseable
+    // Python canonical: raw_id.upper().replace(" ", ""), or "UNKNOWN" if empty
+    let canonical_fallback = {
+        let up = raw.to_uppercase().replace(' ', "");
+        if up.is_empty() { "UNKNOWN".to_string() } else { up }
+    };
     CanonicalPatentId {
         raw: raw.to_string(),
-        canonical: format!("UNKNOWN/{}", raw),
+        canonical: canonical_fallback,
         jurisdiction: "UNKNOWN".to_string(),
         number: raw.to_string(),
         kind_code: None,
@@ -266,8 +271,9 @@ fn try_wo(s: &str, raw: &str) -> Option<CanonicalPatentId> {
     let year: u32 = cap[1].parse().ok()?;
     let serial = &cap[2];
     let kind = cap.get(3).map(|m| m.as_str().to_string());
-    let number = format!("{}/{}", year, serial);
-    let canonical = format!("WO{}/{}", year, serial);
+    // Python canonical: WO<year><serial> (no slash separator)
+    let number = format!("{}{}", year, serial);
+    let canonical = format!("WO{}{}", year, serial);
     Some(make_ok(raw, canonical, "WO", number, kind, "application", Some(year)))
 }
 
@@ -293,7 +299,11 @@ fn try_cn(s: &str, raw: &str) -> Option<CanonicalPatentId> {
     let cap = CN_RE.captures(s)?;
     let number = cap[1].to_string();
     let kind = cap.get(2).map(|m| m.as_str().to_string());
-    let canonical = format!("CN{}", number);
+    // Python canonical includes the kind code suffix: CN<number><kind> (e.g. CN202310001234A)
+    let canonical = match &kind {
+        Some(k) => format!("CN{}{}", number, k),
+        None => format!("CN{}", number),
+    };
     Some(make_ok(raw, canonical, "CN", number, kind, "patent", None))
 }
 
@@ -309,7 +319,8 @@ fn try_kr_app(s: &str, raw: &str) -> Option<CanonicalPatentId> {
 
 fn try_kr_granted(s: &str, raw: &str) -> Option<CanonicalPatentId> {
     let cap = KR_GRANTED_RE.captures(s)?;
-    let number = format!("10-{}", &cap[1]);
+    // Python canonical: KR10<number> (no dash separator)
+    let number = format!("10{}", &cap[1]);
     let kind = cap.get(2).map(|m| m.as_str().to_string());
     let canonical = format!("KR{}", number);
     Some(make_ok(raw, canonical, "KR", number, kind, "patent", None))
@@ -421,7 +432,9 @@ mod tests {
         let r = canonicalize("WO2024123456");
         assert_eq!(r.jurisdiction, "WO");
         assert_eq!(r.filing_year, Some(2024));
-        assert!(r.canonical.starts_with("WO2024/"));
+        // Python canonical: WO<year><serial> (no slash separator)
+        assert!(r.canonical.starts_with("WO2024"));
+        assert!(!r.canonical.contains('/'));
     }
 
     #[test]
@@ -510,7 +523,8 @@ mod tests {
         let cases = [
             ("US7654321", "US7654321", "US"),
             ("EP1234567B1", "EP1234567", "EP"),
-            ("WO2024123456", "WO2024/123456", "WO"),
+            // Python canonical for WO: no slash separator (WO<year><serial>)
+            ("WO2024123456", "WO2024123456", "WO"),
         ];
         for (input, expected_canonical, expected_jur) in cases {
             let r = canonicalize(input);

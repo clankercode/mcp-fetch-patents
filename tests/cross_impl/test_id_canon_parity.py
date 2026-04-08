@@ -28,7 +28,7 @@ TEST_IDS = [
 ]
 
 # Fields that must agree between implementations.
-COMPARE_FIELDS = ["jurisdiction", "doc_type", "kind_code"]
+COMPARE_FIELDS = ["jurisdiction", "doc_type", "kind_code", "canonical"]
 
 
 def _python_result(raw_id: str) -> dict:
