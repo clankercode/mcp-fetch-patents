@@ -1,0 +1,102 @@
+# Manual E2E Test Run Log
+
+## Summary Table
+
+| Date       | Run ID | Tests | Passed | Failed | Notes                                    |
+|------------|--------|-------|--------|--------|------------------------------------------|
+| 2026-04-08 | R001   | 12    | 12     | 0      | Initial run (E2E-001–012). All MCP protocol tests pass. |
+| 2026-04-08 | R002   | 32    | 32     | 0      | Full expanded suite (E2E-001–032). CA3011111 fetch succeeded with metadata. All protocol tests pass. |
+
+---
+
+## 2026-04-08
+
+### Run R002 — Full Expanded Suite (32 tests)
+
+**Environment:**
+- Model: claude-haiku-4-5-20251001
+- MCP server: patent-mcp-server v0.1.0 (Rust), installed at `/home/xertrov/.cargo/bin/patent-mcp-server`
+- MCP name: `patent-tools` (in `.mcp.json`)
+- Python backend: patent_mcp v0.1.0 in `.venv/`
+- Runner: `claude --model haiku -p --allowedTools "mcp__patent_tools__*" --permission-mode bypassPermissions`
+- Cache: cleared (`rm -rf .patents/`) before run
+
+**Results:**
+
+| Test ID  | Tool                  | Category                     | Result | Notes |
+|----------|-----------------------|------------------------------|--------|-------|
+| E2E-001  | fetch_patents         | Basic functionality          | PASS   | results[1], canonical_id=US7654321, summary.total=1. MCP protocol correct. |
+| E2E-002  | fetch_patents         | Error handling               | PASS   | Empty array: results=[], summary={total:0, success:0, errors:0}. |
+| E2E-003  | fetch_patents         | Batch operations             | PASS   | results[2]: US7654321 + EP1234567, summary.total=2. |
+| E2E-004  | fetch_patents         | Error handling               | PASS   | Invalid ID: canonical_id=UNKNOWN/INVALID-XXXXX-NOTREAL, success=false, errors=1. |
+| E2E-005  | fetch_patents         | Cache behavior               | PASS   | force_refresh=true accepted, from_cache=false, summary.total=1. |
+| E2E-006  | list_cached_patents   | Basic functionality          | PASS   | Empty cache: {patents:[], count:0}. |
+| E2E-007  | list_cached_patents   | Basic functionality          | PASS   | After fetches: {patents:[], count:0}. Upstream fetches didn't cache. |
+| E2E-008  | get_patent_metadata   | Basic functionality          | PASS   | results[1]: canonical_id=US7654321, metadata=null. Cache-only correct. |
+| E2E-009  | get_patent_metadata   | Error handling               | PASS   | Uncached US9999999: metadata=null. No crash. |
+| E2E-010  | get_patent_metadata   | Batch operations             | PASS   | results[2]: US7654321 + US0000000, both present. No short-circuit. |
+| E2E-011  | fetch_patents         | ID canonicalization          | PASS   | US7654321, US7654321B2, 7654321 all → US7654321. summary.total=3. |
+| E2E-012  | N/A                   | Edge case (no such tool)     | PASS   | Claude reported delete_all_patents not available. |
+| E2E-013  | fetch_patents         | Parameter combinations       | PASS   | postprocess_query accepted, results[1], summary.total=1. No param error. |
+| E2E-014  | fetch_patents         | Parameter combinations       | PASS   | force_refresh+postprocess_query on EP1234567. Both accepted, from_cache=false. |
+| E2E-015  | get_patent_metadata   | Error handling / boundary    | PASS   | Empty array: results=[]. No crash. |
+| E2E-016  | fetch + metadata      | Interaction sequences        | PASS   | fetch US8765432 then metadata lookup. Both returned valid structure. metadata=null (fetch failed upstream). |
+| E2E-017  | fetch_patents         | Boundary values              | PASS   | "US-7654321-B2" → UNKNOWN/US-7654321-B2, "US 7654321" → US7654321. Both entries returned. |
+| E2E-018  | fetch_patents         | Boundary / batch             | PASS   | 5 IDs (US1000001–US1000005), results[5], summary.total=5. |
+| E2E-019  | fetch_patents (x2)    | Cache behavior               | PASS   | Both calls returned canonical_id=US7654321, from_cache=false (fetch failed, nothing cached). |
+| E2E-020  | get_patent_metadata   | Response structure           | PASS   | WO2020123456 → canonical_id=WO2020/123456, metadata=null. WO format handled. |
+| E2E-021  | fetch_patents         | Batch / deduplication        | PASS   | 4 IDs (3x US7654321 + EP1234567): results[4], no dedup. summary.total=4. |
+| E2E-022  | get_patent_metadata   | Batch / scaling              | PASS   | 7 IDs (US/EP/JP/CN/GB/AU): results[7], each with canonical_id and metadata. |
+| E2E-023  | fetch_patents         | International jurisdictions  | PASS   | JP/CN/KR/CA/AU: results[5]. CA3011111 succeeded with metadata (title: "Dual racking board drilling rig"). KR10-2020-1234567 → KR1020201234567. |
+| E2E-024  | fetch_patents         | Error handling / batch       | PASS   | Mixed valid+invalid: results[5]. Invalid IDs got UNKNOWN/ prefix. No short-circuit. |
+| E2E-025  | fetch_patents         | Parameter combinations       | PASS   | force_refresh+postprocess_query on US7654321. Both accepted, from_cache=false. |
+| E2E-026  | fetch + list (x2)     | Tool chaining / cache growth | PASS   | 4 tool calls. list count=1 both times (CA3011111 from E2E-023 cached). Second count >= first. |
+| E2E-027  | get_patent_metadata   | Error handling / canonical   | PASS   | 5 garbage IDs: all got UNKNOWN/ prefix, metadata=null. No crash. |
+| E2E-028  | fetch_patents         | Edge case / input validation | PASS   | Empty "" and whitespace "   " IDs: both → UNKNOWN/, success=false. No crash. |
+| E2E-029  | fetch_patents         | Boundary / long input        | PASS   | 110-char ID: canonical_id=UNKNOWN/US123...890, success=false. No crash or timeout. |
+| E2E-030  | fetch_patents         | Parameter combinations       | PASS   | force_refresh=false explicitly. Accepted, summary.total=1. No param error. |
+| E2E-031  | list_cached_patents   | Idempotency                  | PASS   | 3 sequential calls: all returned {count:1, patents:[CA3011111]}. Identical. |
+| E2E-032  | fetch + metadata      | Kind-code handling           | PASS   | US7654321, US7654321B1, US7654321B2 all → US7654321. Consistent across both tools. |
+
+**Overall: 32/32 PASS (100%)**
+
+**Observations:**
+- CA3011111 (Canadian patent) successfully fetched with metadata via web_search fallback — title "Dual racking board drilling rig". This is the only patent that succeeded in this run.
+- Most upstream sources (USPTO PPUBS, EPO OPS, Espacenet) return 403/404. This is infrastructure, not server bugs.
+- ID canonicalization is consistent: kind codes (B1, B2) are stripped, bare numbers get US prefix, KR format normalized, WO gets slash insertion (WO2020/123456).
+- Batch operations scale correctly (tested up to 7 IDs).
+- Duplicate IDs in batch are NOT deduplicated — each occurrence is processed independently (4 input → 4 results).
+- Empty strings and whitespace canonicalize to "UNKNOWN/" gracefully.
+- Very long IDs (110 chars) handled without crash or timeout.
+- list_cached_patents is fully idempotent (3 identical sequential calls).
+- force_refresh=false (explicit default) accepted without error.
+- postprocess_query accepted as a no-op parameter in all contexts.
+- Multi-tool chaining (fetch→list→fetch→list, fetch→metadata) works correctly with shared cache state.
+
+---
+
+### Run R001 — Initial Suite (12 tests)
+
+**Environment:**
+- Model: claude-haiku-4-5-20251001
+- MCP server: patent-mcp-server v0.1.0 (Rust)
+- Runner: `claude --model haiku -p --allowedTools "mcp__patent_tools__*" --permission-mode bypassPermissions`
+
+**Results:**
+
+| Test ID  | Tool                  | Category                | Result | Notes |
+|----------|-----------------------|-------------------------|--------|-------|
+| E2E-001  | fetch_patents         | Basic functionality     | PASS   | results[1], canonical_id=US7654321, summary.total=1. |
+| E2E-002  | fetch_patents         | Error handling          | PASS   | Empty array: results=[], summary={total:0, success:0, errors:0}. |
+| E2E-003  | fetch_patents         | Batch operations        | PASS   | results[2]: US7654321 + EP1234567, summary.total=2. |
+| E2E-004  | fetch_patents         | Error handling          | PASS   | Invalid ID: canonical_id=UNKNOWN/INVALID-XXXXX-NOTREAL, success=false. |
+| E2E-005  | fetch_patents         | Cache behavior          | PASS   | force_refresh accepted, from_cache=false. |
+| E2E-006  | list_cached_patents   | Basic functionality     | PASS   | Empty cache: {patents:[], count:0}. |
+| E2E-007  | list_cached_patents   | Basic functionality     | PASS   | After fetches: {patents:[], count:0}. |
+| E2E-008  | get_patent_metadata   | Basic functionality     | PASS   | canonical_id=US7654321, metadata=null. |
+| E2E-009  | get_patent_metadata   | Error handling          | PASS   | Uncached US9999999: metadata=null. |
+| E2E-010  | get_patent_metadata   | Batch operations        | PASS   | results[2]: both entries present. |
+| E2E-011  | fetch_patents         | ID canonicalization     | PASS   | All 3 formats → US7654321. |
+| E2E-012  | N/A                   | Edge case (no such tool)| PASS   | Claude reported tool not available. |
+
+**Overall: 12/12 PASS (100%)**

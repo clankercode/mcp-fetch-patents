@@ -162,7 +162,7 @@ fn fetch_via_python(
     cache_dir: &str,
 ) -> anyhow::Result<OrchestratorResult> {
     let output = std::process::Command::new("python3")
-        .args(["-m", "patent_mcp", "fetch-one", canonical_id, "--cache-dir", cache_dir])
+        .args(["-m", "patent_mcp", "--cache-dir", cache_dir, "fetch-one", canonical_id])
         .output()?;
 
     if !output.status.success() {

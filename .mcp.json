@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "patent-tools": {
+      "type": "stdio",
+      "command": "/home/xertrov/.cargo/bin/patent-mcp-server",
+      "args": [],
+      "env": {
+        "PATH": "/home/xertrov/src/mcp-fetch-patents/.venv/bin:/home/xertrov/.cargo/bin:/usr/bin:/bin"
+      }
+    }
+  }
+}
