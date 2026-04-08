@@ -36,11 +36,13 @@ The server uses the same API keys as the main patent fetcher:
 - `PATENT_SERPAPI_KEY` — Google Patents search via SerpAPI (most important for natural language search)
 - `PATENT_EPO_KEY` — EPO OPS for classification search and citation chains (optional, free tier available without key)
 
-Set these in `.env` (already set if you followed the project setup):
+If you are running the Python server from this checkout, you can set these in a repo-local `.env`:
 ```
 PATENT_SERPAPI_KEY=your-key-here
 PATENT_EPO_KEY=client_id:client_secret
 ```
+
+If you are using the installed Rust server, use `~/.patents.toml` and/or environment variables injected by your MCP launcher instead of a repo-local `.env`.
 
 ## Agent Capabilities
 

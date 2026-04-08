@@ -972,7 +972,7 @@ impl EpoOpsSource {
                     }
                 }
                 Ok(Event::Text(ref e)) => {
-                    let text = e.unescape().unwrap_or_default().trim().to_string();
+                    let text = e.decode().unwrap_or_default().trim().to_string();
                     if !text.is_empty() {
                         if in_invention_title
                             && (is_english_title || title.is_none())
