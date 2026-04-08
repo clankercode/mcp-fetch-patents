@@ -1,21 +1,23 @@
 # mcp-fetch-patents
 
-**Give any AI agent instant access to the global patent corpus.**
+**The last patent data tool your agent will ever need.**
 
-One MCP tool call. Any patent ID format. PDF + Markdown + structured metadata back in seconds — or instantly from cache. Your agent never waits for the same patent twice.
+Give any AI agent instant access to the entire global patent corpus. One MCP tool call. Throw any patent ID at it — US, EP, WO, JP, CN, KR, AU, CA, NZ, BR, IN — in any format, with or without kind codes, even raw Google Patents URLs. Get back PDF, Markdown, and structured metadata in seconds. Ask for it again? Instant, from cache.
 
-Built in Rust for speed. 9 patent sources. 4 PDF converters. Two-layer SQLite cache. Zero configuration required.
+Your agent shouldn't have to know that US patents live on USPTO PPUBS, European ones require EPO OPS OAuth2, and PCT applications need to be scraped from WIPO PatentScope. It shouldn't care that Espacenet has different HTML than CIPO, or that Google Patents needs a headless browser. This server ate all of that complexity so your agent never has to think about it.
 
 ```
 "Fetch US7654321, EP1234567B1, and WO2024/123456"
-  → 3 PDFs, 3 Markdown files, 3 metadata objects, all cached for next time
+  → 3 PDFs, 3 Markdown files, 3 metadata objects — cached forever
 ```
+
+9 patent sources. 4 PDF-to-Markdown converters with OCR. Two-layer SQLite cache. Automatic retry with exponential backoff. Web search fallback when everything else fails. Zero configuration required — works out of the box with 6 of 9 sources.
 
 ---
 
 ## Why this exists
 
-Patent data is scattered across dozens of national databases, each with its own API, format, and quirks. An agent doing patent analysis shouldn't have to figure out that a US patent lives on USPTO PPUBS, a European one needs EPO OPS OAuth2, and a PCT application requires scraping WIPO PatentScope. This server handles all of that behind a single interface.
+Patent data is the most fragmented public dataset on the planet. Every national patent office has its own API, auth scheme, document format, and rate limits. An agent doing patent analysis shouldn't need to know any of that — it should just say "get me this patent" and get it.
 
 **9 patent sources, 1 tool call:**
 
@@ -31,50 +33,46 @@ Patent data is scattered across dozens of national databases, each with its own 
 | Google BigQuery | Bulk patent data | Yes (GCP credentials) |
 | Web search fallback | Anything missed | No (DuckDuckGo) / Optional (SerpAPI) |
 
-Sources are tried in priority order. First success wins (unless you set `PATENT_FETCH_ALL_SOURCES=true`). If all structured sources fail, web search finds the PDF anyway.
+Sources are tried in priority order. First success wins (unless you set `PATENT_FETCH_ALL_SOURCES=true` to aggregate from all). If every structured source fails, the web search fallback finds the PDF anyway. We really don't like returning empty-handed.
 
 ## Quick start
 
 ### Install
 
 ```bash
-# Rust (recommended — standalone, fast)
+# Rust (recommended)
 cargo install patent-mcp-server
+
 # or build from source:
 cargo build --release --manifest-path src/rust/Cargo.toml
 
-# Python (reference implementation)
+# Python (reference implementation, also works standalone)
 pip install patent-mcp-server
 ```
 
 ### Configure your MCP client
 
-**Claude Desktop / Claude Code / Cursor / Cline:**
+Add to your Claude Desktop, Claude Code, Cursor, or Cline config:
 
 ```json
 {
   "mcpServers": {
     "patents": {
-      "command": "patent-mcp-server",
-      "env": {
-        "PATENT_EPO_KEY": "your_client_id:your_client_secret"
-      }
+      "command": "patent-mcp-server"
     }
   }
 }
 ```
 
-No API keys? That's fine — USPTO, Espacenet, WIPO, IP Australia, CIPO, and DuckDuckGo all work without auth. Add keys later to unlock EPO OPS, BigQuery, and SerpAPI. See [docs/api-keys.md](docs/api-keys.md) for setup.
+That's the whole setup. No API keys needed — 6 of 9 sources work without auth (USPTO, Espacenet, WIPO, IP Australia, CIPO, DuckDuckGo). Add keys later to unlock EPO OPS, BigQuery, and SerpAPI. See [docs/api-keys.md](docs/api-keys.md).
 
 ### Use it
-
-Ask your agent to fetch patents. That's it.
 
 ```
 "Fetch patents US7654321 and EP1234567B1, then summarize the key claims."
 ```
 
-The agent calls `fetch_patents`, gets back file paths and metadata, reads the Markdown, and does its thing.
+The agent calls `fetch_patents`, gets back file paths and metadata, reads the Markdown, and does its thing. You don't configure sources. You don't pick formats. You don't manage cache. It just works.
 
 ## Tools
 
@@ -139,7 +137,7 @@ Cache-only metadata lookup — no network calls, instant response.
 
 ## Patent ID formats
 
-Throw whatever you have at it. The canonicalizer handles all of these:
+Don't worry about formatting. The canonicalizer has seen it all:
 
 | Input | Canonical form | Jurisdiction |
 |---|---|---|
@@ -156,7 +154,7 @@ Throw whatever you have at it. The canonicalizer handles all of these:
 | `CA3123456` | `CA3123456` | Canada |
 | `https://patents.google.com/patent/US7654321/en` | `US7654321` | (extracted) |
 
-Also supports NZ, BR, and IN formats.
+Also handles NZ, BR, and IN formats. 22+ patterns total. If it looks like a patent number, we'll figure it out.
 
 ## How it works
 
@@ -178,11 +176,11 @@ Agent                    MCP Server (Rust)
   │   files + metadata        │
 ```
 
-**Cache architecture:** Two-layer SQLite — local `.patents/index.db` per repo + global `~/.local/share/patent-cache/index.db` (XDG). Files live in `.patents/{CANONICAL_ID}/`. Second fetch of the same patent is instant.
+**Cache:** Two-layer SQLite — local `.patents/index.db` per project + global `~/.local/share/patent-cache/index.db` shared across all projects. Files live in `.patents/{CANONICAL_ID}/`. First fetch takes seconds. Every subsequent fetch is instant — even across different repos.
 
-**PDF → Markdown pipeline:** Four converter backends tried in order (pymupdf4llm → pdfplumber → pdftotext → marker). Tables extracted and merged. OCR via tesseract for scanned figures.
+**PDF → Markdown:** Four converter backends tried in order (pymupdf4llm → pdfplumber → pdftotext → marker). If one fails, the next picks up. Tables extracted and merged. OCR via tesseract for scanned patent figures. The output is clean enough for an LLM to read directly.
 
-**Dual implementation:** Rust is the production server — standalone, fast, with native async HTTP fetchers, retry logic, and a full source orchestrator. Python is the reference implementation used for cross-implementation parity testing. Both implementations pass 100+ tests; 32 cross-impl parity tests verify they produce identical results for ID canonicalization, source ordering, converter output, and web search queries.
+**Dual implementation, cross-verified:** Rust is the production server — standalone, async, with native HTTP fetchers and retry logic. Python is the reference implementation. 32 cross-implementation parity tests verify both produce identical results for ID canonicalization, source ordering, converter output, and web search queries. When we say they match, we mean it — it's tested.
 
 ## Configuration
 
@@ -250,6 +248,10 @@ tests/
 docs/
   api-keys.md              # API key setup for each source
 ```
+
+## What makes this different
+
+Most patent tools give you an API wrapper for one database. This gives your agent the entire global patent system behind a single function call. It handles the authentication, the format differences, the fallbacks, the caching, and the PDF-to-text conversion. Your agent asks for a patent and gets back something it can read. That's it. That's the product.
 
 ## License
 
