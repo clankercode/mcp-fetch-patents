@@ -37,6 +37,8 @@ coverage.xml
 .playwright-mcp/
 .claude/
 artifacts/
+.mcp.json
+opencode.json
 
 # IDE
 .idea/

@@ -1,6 +1,7 @@
 [package]
 name = "patent-mcp-server"
 version = "0.1.0"
+license = "CC0-1.0"
 edition = "2021"
 description = "MCP server for fetching and caching patents by ID (Rust production implementation)"
 

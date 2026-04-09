@@ -7,11 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
 use async_trait::async_trait;
 use chrono::Utc;
 use reqwest::Client;
-use tokio::time::sleep;
 use tracing::{debug, warn};
 
 use crate::cache::{PatentMetadata, SessionCache, SourceAttempt};
@@ -41,44 +39,6 @@ fn base_url(config: &PatentConfig, key: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
-/// Retry a cloneable request on transient failures (429, 5xx, timeout, connect error).
-#[allow(dead_code)]
-async fn fetch_with_retry(
-    _client: &Client,
-    request_builder: reqwest::RequestBuilder,
-    max_attempts: u32,
-) -> Result<reqwest::Response> {
-    let mut last_err = None;
-    for attempt in 0..max_attempts {
-        if attempt > 0 {
-            let delay = Duration::from_secs(1 << attempt.min(3)); // 2s, 4s, 8s
-            sleep(delay).await;
-        }
-        match request_builder.try_clone() {
-            Some(rb) => match rb.send().await {
-                Ok(resp) => {
-                    let status = resp.status().as_u16();
-                    if status == 429 || (500..=504).contains(&status) {
-                        last_err =
-                            Some(anyhow::anyhow!("HTTP {} (attempt {})", status, attempt + 1));
-                        continue;
-                    }
-                    return Ok(resp);
-                }
-                Err(e) => {
-                    if e.is_timeout() || e.is_connect() {
-                        last_err = Some(e.into());
-                        continue;
-                    }
-                    return Err(e.into());
-                }
-            },
-            None => return Err(anyhow::anyhow!("Request not cloneable")),
-        }
-    }
-    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("All retry attempts exhausted")))
-}
-
 /// Helper to create a `FetchResult` for a failed attempt.
 fn fail_result(source: &str, error: &str) -> FetchResult {
     FetchResult {
@@ -103,47 +63,6 @@ fn metadata_has_useful_fields(meta: &PatentMetadata) -> bool {
         || meta.filing_date.is_some()
         || meta.publication_date.is_some()
         || meta.grant_date.is_some()
-}
-
-// ---------------------------------------------------------------------------
-// PatentsView Stub (deprecated)
-// ---------------------------------------------------------------------------
-
-/// PatentsView was shut down March 20, 2026. Returns helpful error.
-#[allow(dead_code)] // used in tests
-pub(crate) struct PatentsViewStubSource;
-
-#[async_trait]
-impl PatentSource for PatentsViewStubSource {
-    fn source_name(&self) -> &str {
-        "PatentsView"
-    }
-
-    fn supported_jurisdictions(&self) -> &[&str] {
-        &["US"]
-    }
-
-    async fn fetch(
-        &self,
-        _patent: &CanonicalPatentId,
-        _output_dir: &Path,
-        _config: &PatentConfig,
-    ) -> FetchResult {
-        FetchResult {
-            source_attempt: SourceAttempt {
-                source: "PatentsView".into(),
-                success: false,
-                elapsed_ms: 0.0,
-                error: Some(
-                    "PatentsView API was shut down March 20, 2026. Use USPTO ODP instead.".into(),
-                ),
-                metadata: None,
-            },
-            pdf_path: None,
-            txt_path: None,
-            metadata: None,
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -228,27 +147,6 @@ impl PatentSource for EspacenetSource {
                 .or_else(|| h1_sel.and_then(|s| document.select(&s).next()))
                 .map(|el| el.text().collect::<String>().trim().to_string())
                 .filter(|t| !t.is_empty())
-        };
-
-        // Look for PDF link
-        let _pdf_url: Option<String> = {
-            let a_sel = scraper::Selector::parse("a[href]").ok();
-            a_sel.and_then(|s| {
-                document.select(&s).find_map(|el| {
-                    let href = el.value().attr("href")?;
-                    let lower = href.to_lowercase();
-                    if lower.contains(".pdf") || lower.contains("download") {
-                        let full = if href.starts_with("http") {
-                            href.to_string()
-                        } else {
-                            format!("{}{}", base, href)
-                        };
-                        Some(full)
-                    } else {
-                        None
-                    }
-                })
-            })
         };
 
         let meta = PatentMetadata {
@@ -1491,33 +1389,6 @@ mod tests {
             search_backend_default: "browser".into(),
             search_enrich_top_n: 5,
         }
-    }
-
-    #[test]
-    fn test_patents_view_stub_returns_error() {
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            let source = PatentsViewStubSource;
-            let patent = crate::id_canon::canonicalize("US7654321");
-            let config = test_config();
-            let result = source.fetch(&patent, Path::new("/tmp"), &config).await;
-            assert!(!result.source_attempt.success);
-            assert!(result
-                .source_attempt
-                .error
-                .as_ref()
-                .unwrap()
-                .contains("shut down"));
-        });
-    }
-
-    #[test]
-    fn test_can_fetch_jurisdiction_filtering() {
-        let source = PatentsViewStubSource;
-        let us_patent = crate::id_canon::canonicalize("US7654321");
-        let ep_patent = crate::id_canon::canonicalize("EP1234567");
-        assert!(source.can_fetch(&us_patent));
-        assert!(!source.can_fetch(&ep_patent));
     }
 
     #[test]

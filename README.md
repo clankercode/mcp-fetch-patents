@@ -219,7 +219,7 @@ Agent                    MCP Server (Rust)
 
 **PDF → Markdown:** Four converter backends tried in order (pymupdf4llm → pdfplumber → pdftotext → marker). If one fails, the next picks up. Tables extracted and merged. OCR via tesseract for scanned patent figures. The output is clean enough for an LLM to read directly.
 
-**Dual implementation, cross-verified:** Rust is the production server — standalone, async, with native HTTP fetchers and retry logic. Python is the reference implementation. 32 cross-implementation parity tests verify both produce identical results for ID canonicalization, source ordering, converter output, and web search queries. When we say they match, we mean it — it's tested.
+**Dual implementation, cross-verified:** Rust is the production server — standalone, async, with native HTTP fetchers and retry logic. Python is the reference implementation. 39 cross-implementation parity tests verify both produce identical results for ID canonicalization, source ordering, converter output, and web search queries. When we say they match, we mean it — it's tested.
 
 ## Configuration
 
@@ -234,7 +234,7 @@ All config via autoloaded env files, `~/.patents.toml`, or environment variables
 | `PATENT_LENS_KEY` | — | Lens.org API key |
 | `PATENT_SERPAPI_KEY` | — | SerpAPI key (web search fallback) |
 | `PATENT_BIGQUERY_PROJECT` | — | GCP project for BigQuery source |
-| `PATENT_FETCH_ALL_SOURCES` | `false` | Try all sources even after first success |
+| `PATENT_FETCH_ALL_SOURCES` | `true` | Try all sources even after first success |
 | `PATENT_ACTIVITY_JOURNAL` | `.patent-activity.jsonl` | Per-repo activity journal (empty = disabled) |
 | `PATENT_SEARCH_BACKEND_DEFAULT` | `browser` | Default search backend (`browser`, `serpapi`, `auto`) |
 | `PATENT_SEARCH_BROWSER_HEADLESS` | `true` | Run Playwright in headless mode |
@@ -247,7 +247,7 @@ All config via autoloaded env files, `~/.patents.toml`, or environment variables
 ### Running tests
 
 ```bash
-# Rust tests (226 tests, <0.1s)
+# Rust tests (235 tests, <0.1s)
 cargo test --manifest-path src/rust/Cargo.toml
 
 # Direct stdio MCP smoke test against the Rust dev server
@@ -262,7 +262,7 @@ pytest tests/python/ -m "not browser and not integration and not slow"
 # Full Python suite (includes fuzz tests via Hypothesis, slow tests)
 pytest tests/python/
 
-# Cross-implementation parity — verifies Python == Rust (32 tests)
+# Cross-implementation parity — verifies Python == Rust (39 tests)
 pytest tests/cross_impl/
 
 # Manual E2E tests — automated script (31 tests)

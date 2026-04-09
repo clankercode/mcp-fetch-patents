@@ -185,9 +185,6 @@ fn parse_google_patents_metadata(html: &str, patent: &CanonicalPatentId) -> Opti
 
     let legal_status = text_content(&document, r#"[itemprop="legalStatusIfi"] [itemprop="status"]"#);
 
-    let _pdf_url = meta_content(&document, r#"meta[name="citation_pdf_url"]"#)
-        .or_else(|| href_attr(&document, r#"a[itemprop="pdfLink"]"#));
-
     if title.is_none()
         && abstract_text.is_none()
         && assignee.is_none()
@@ -255,10 +252,6 @@ fn meta_content_with_attr(document: &Html, query: &str, attr: &str) -> Option<St
 
 fn datetime_attr(document: &Html, query: &str) -> Option<String> {
     meta_content_with_attr(document, query, "datetime")
-}
-
-fn href_attr(document: &Html, query: &str) -> Option<String> {
-    meta_content_with_attr(document, query, "href")
 }
 
 #[cfg(test)]

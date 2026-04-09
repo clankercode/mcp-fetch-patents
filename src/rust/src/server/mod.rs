@@ -580,7 +580,6 @@ async fn execute_tool_call(
         "fetch_patents" => {
             let patent_ids = get_str_array_param(&params, "patent_ids").unwrap_or_default();
             let force_refresh = get_bool_param(&params, "force_refresh").unwrap_or(false);
-            let _formats = get_str_array_param(&params, "formats");
 
             let payload = build_fetch_patents_payload(
                 &patent_ids,
@@ -1397,13 +1396,23 @@ pub async fn run_server(config: PatentConfig) -> Result<()> {
 
     let backends = SearchBackends {
         serpapi: config.serpapi_key.as_ref().map(|key| {
-            crate::search::searchers::SerpApiGooglePatentsBackend::new(key.clone(), None, None)
+            crate::search::searchers::SerpApiGooglePatentsBackend::new(
+                key.clone(),
+                None,
+                std::time::Duration::from_secs_f64(config.timeout_secs),
+                None,
+            )
         }),
-        uspto: crate::search::searchers::UsptoTextSearchBackend::new(None, None),
+        uspto: crate::search::searchers::UsptoTextSearchBackend::new(
+            None,
+            std::time::Duration::from_secs_f64(config.timeout_secs),
+            None,
+        ),
         epo: crate::search::searchers::EpoOpsSearchBackend::new(
             config.epo_client_id.clone(),
             config.epo_client_secret.clone(),
             None,
+            std::time::Duration::from_secs_f64(config.timeout_secs),
             None,
         ),
         session_manager: crate::search::session_manager::SessionManager::new(None),
@@ -1874,13 +1883,23 @@ mod tests {
         let sessions_tmp = tempfile::tempdir().unwrap();
         let backends = SearchBackends {
             serpapi: config.serpapi_key.as_ref().map(|key| {
-                crate::search::searchers::SerpApiGooglePatentsBackend::new(key.clone(), None, None)
+                crate::search::searchers::SerpApiGooglePatentsBackend::new(
+                    key.clone(),
+                    None,
+                    std::time::Duration::from_secs(30),
+                    None,
+                )
             }),
-            uspto: crate::search::searchers::UsptoTextSearchBackend::new(None, None),
+            uspto: crate::search::searchers::UsptoTextSearchBackend::new(
+                None,
+                std::time::Duration::from_secs(30),
+                None,
+            ),
             epo: crate::search::searchers::EpoOpsSearchBackend::new(
                 config.epo_client_id.clone(),
                 config.epo_client_secret.clone(),
                 None,
+                std::time::Duration::from_secs(30),
                 None,
             ),
             session_manager: crate::search::session_manager::SessionManager::new(Some(

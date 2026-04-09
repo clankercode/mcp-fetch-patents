@@ -1,4 +1,5 @@
 """Cache layer: in-memory session token cache + on-disk patent artifact cache backed by SQLite."""
+
 from __future__ import annotations
 
 import json
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from patent_mcp.config import PatentConfig
+from patent_mcp.utils import now_iso
 
 log = logging.getLogger(__name__)
 
@@ -18,6 +20,7 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Data types
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class SessionToken:
@@ -46,8 +49,8 @@ class PatentMetadata:
     filing_date: str | None = None
     publication_date: str | None = None
     grant_date: str | None = None
-    fetched_at: str = field(default_factory=lambda: _now_utc())
-    legal_status: str | None = None       # always null in v1
+    fetched_at: str = field(default_factory=now_iso)
+    legal_status: str | None = None  # always null in v1
     status_fetched_at: str | None = None  # always null in v1
 
 
@@ -55,9 +58,9 @@ class PatentMetadata:
 class CacheResult:
     canonical_id: str
     cache_dir: Path
-    files: dict[str, Path]   # format → absolute path
+    files: dict[str, Path]  # format → absolute path
     metadata: PatentMetadata
-    is_complete: bool        # all files in DB actually exist on disk
+    is_complete: bool  # all files in DB actually exist on disk
 
 
 @dataclass
@@ -78,9 +81,6 @@ class SourceAttempt:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _now_utc() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _utcnow() -> datetime:
@@ -158,6 +158,7 @@ CREATE INDEX IF NOT EXISTS idx_patents_canonical_id ON patents(canonical_id);
 # SessionCache (in-memory, per-process)
 # ---------------------------------------------------------------------------
 
+
 class SessionCache:
     """In-memory session token cache. Per-process, not persisted to disk."""
 
@@ -176,6 +177,7 @@ class SessionCache:
 
     def set(self, source: str, token: str, ttl_minutes: int = 30) -> None:
         from datetime import timedelta
+
         expires_at = _utcnow() + timedelta(minutes=ttl_minutes)
         self._tokens[source] = SessionToken(token=token, expires_at=expires_at)
 
@@ -190,6 +192,7 @@ class SessionCache:
 # ---------------------------------------------------------------------------
 # PatentCache
 # ---------------------------------------------------------------------------
+
 
 class PatentCache:
     """On-disk patent cache backed by a single global SQLite DB."""
@@ -214,7 +217,7 @@ class PatentCache:
         with self._connect() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO cache_registrations(cache_dir, registered_at) VALUES (?,?)",
-                (str(self._local_dir.resolve()), _now_utc()),
+                (str(self._local_dir.resolve()), now_iso()),
             )
 
     # ------------------------------------------------------------------
@@ -397,7 +400,9 @@ class PatentCache:
                 ),
             )
             # Remove old location rows then re-insert
-            conn.execute("DELETE FROM patent_locations WHERE patent_id=?", (canonical_id,))
+            conn.execute(
+                "DELETE FROM patent_locations WHERE patent_id=?", (canonical_id,)
+            )
             conn.executemany(
                 "INSERT INTO patent_locations(patent_id, format, path) VALUES (?,?,?)",
                 [(canonical_id, fmt, str(p)) for fmt, p in file_entries],
@@ -427,7 +432,7 @@ class PatentCache:
         with self._connect(self._global_db_path) as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO cache_registrations(cache_dir, registered_at) VALUES (?,?)",
-                (str(cache_dir.resolve()), _now_utc()),
+                (str(cache_dir.resolve()), now_iso()),
             )
 
     def list_all(self) -> list[CacheEntry]:
@@ -436,4 +441,7 @@ class PatentCache:
             rows = conn.execute(
                 "SELECT DISTINCT canonical_id, cache_dir FROM patents ORDER BY canonical_id"
             ).fetchall()
-        return [CacheEntry(canonical_id=r["canonical_id"], cache_dir=Path(r["cache_dir"])) for r in rows]
+        return [
+            CacheEntry(canonical_id=r["canonical_id"], cache_dir=Path(r["cache_dir"]))
+            for r in rows
+        ]

@@ -89,8 +89,7 @@ impl SearchRanker {
             }
         }
 
-        // Score each unique hit
-        let concepts = &search_intent.concepts;
+        let compiled = compile_concepts(&search_intent.concepts);
         let date_cutoff = search_intent.date_cutoff.as_deref();
 
         let mut scored: Vec<ScoredHit> = Vec::with_capacity(merged.len());
@@ -98,16 +97,14 @@ impl SearchRanker {
         for (pid, hit) in &merged {
             let mut breakdown: HashMap<String, f64> = HashMap::new();
 
-            // Title coverage: fraction of concepts in title * 3.0
             breakdown.insert(
                 "title_coverage".to_string(),
-                text_coverage(hit.title.as_deref(), concepts) * 3.0,
+                text_coverage(hit.title.as_deref(), &compiled) * 3.0,
             );
 
-            // Snippet / abstract coverage
             breakdown.insert(
                 "snippet_coverage".to_string(),
-                text_coverage(hit.abstract_text.as_deref(), concepts) * 2.0,
+                text_coverage(hit.abstract_text.as_deref(), &compiled) * 2.0,
             );
 
             // Multi-query bonus: found by N variants -> high signal
@@ -147,35 +144,52 @@ impl SearchRanker {
 // Scoring helpers
 // ---------------------------------------------------------------------------
 
+struct CompiledConcept {
+    lower: String,
+    regex: Option<regex::Regex>,
+}
+
+fn compile_concepts(concepts: &[String]) -> Vec<CompiledConcept> {
+    concepts
+        .iter()
+        .map(|c| {
+            let lower = c.to_lowercase();
+            if lower.contains(' ') {
+                CompiledConcept { lower, regex: None }
+            } else {
+                let pattern = format!(r"\b{}\b", regex::escape(&lower));
+                CompiledConcept {
+                    lower,
+                    regex: regex::Regex::new(&pattern).ok(),
+                }
+            }
+        })
+        .collect()
+}
+
 /// Fraction of `concepts` that appear as case-insensitive substrings in `text`.
 ///
 /// Returns 0.0 when `text` is `None` or `concepts` is empty.
-fn text_coverage(text: Option<&str>, concepts: &[String]) -> f64 {
+fn text_coverage(text: Option<&str>, compiled: &[CompiledConcept]) -> f64 {
     let text = match text {
         Some(t) if !t.is_empty() => t,
         _ => return 0.0,
     };
-    if concepts.is_empty() {
+    if compiled.is_empty() {
         return 0.0;
     }
     let lower = text.to_lowercase();
-    let found = concepts
+    let found = compiled
         .iter()
         .filter(|c| {
-            let cl = c.to_lowercase();
-            if cl.contains(' ') {
-                // Multi-word: substring match is specific enough
-                lower.contains(&cl)
+            if let Some(ref re) = c.regex {
+                re.is_match(&lower)
             } else {
-                // Single-word: word-boundary match to avoid "led" matching "assembled"
-                let pattern = format!(r"\b{}\b", regex::escape(&cl));
-                regex::Regex::new(&pattern)
-                    .map(|re| re.is_match(&lower))
-                    .unwrap_or_else(|_| lower.contains(&cl))
+                lower.contains(&c.lower)
             }
         })
         .count();
-    found as f64 / concepts.len() as f64
+    found as f64 / compiled.len() as f64
 }
 
 /// Score based on date relative to cutoff.
@@ -285,7 +299,8 @@ mod tests {
     #[test]
     fn text_coverage_full_match() {
         let concepts = vec!["neural".to_string(), "network".to_string()];
-        let score = text_coverage(Some("Neural Network Architecture"), &concepts);
+        let compiled = compile_concepts(&concepts);
+        let score = text_coverage(Some("Neural Network Architecture"), &compiled);
         assert!(
             (score - 1.0).abs() < f64::EPSILON,
             "expected 1.0, got {score}"
@@ -295,7 +310,8 @@ mod tests {
     #[test]
     fn text_coverage_partial_match() {
         let concepts = vec!["neural".to_string(), "quantum".to_string()];
-        let score = text_coverage(Some("Neural Network Architecture"), &concepts);
+        let compiled = compile_concepts(&concepts);
+        let score = text_coverage(Some("Neural Network Architecture"), &compiled);
         assert!(
             (score - 0.5).abs() < f64::EPSILON,
             "expected 0.5, got {score}"
@@ -305,7 +321,8 @@ mod tests {
     #[test]
     fn text_coverage_no_match() {
         let concepts = vec!["quantum".to_string(), "entanglement".to_string()];
-        let score = text_coverage(Some("Neural Network Architecture"), &concepts);
+        let compiled = compile_concepts(&concepts);
+        let score = text_coverage(Some("Neural Network Architecture"), &compiled);
         assert!(
             (score - 0.0).abs() < f64::EPSILON,
             "expected 0.0, got {score}"
@@ -315,7 +332,8 @@ mod tests {
     #[test]
     fn text_coverage_none_text() {
         let concepts = vec!["neural".to_string()];
-        let score = text_coverage(None, &concepts);
+        let compiled = compile_concepts(&concepts);
+        let score = text_coverage(None, &compiled);
         assert!((score - 0.0).abs() < f64::EPSILON);
     }
 

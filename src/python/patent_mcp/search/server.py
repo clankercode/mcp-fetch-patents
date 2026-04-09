@@ -144,6 +144,7 @@ def patent_session_create(
         "created_at": session.created_at,
         "sessions_dir": str(sm.sessions_dir),
         "message": f"Session created. Use session_id='{session.session_id}' in search calls to auto-save results.",
+        "isError": False,
     }
 
 
@@ -162,10 +163,11 @@ def patent_session_load(session_id: str) -> dict[str, Any]:
         session = sm.load_session(session_id)
         from patent_mcp.search.session_manager import _session_to_dict
 
-        return _session_to_dict(session)
+        return {**_session_to_dict(session), "isError": False}
     except FileNotFoundError:
         return {
-            "error": f"Session '{session_id}' not found. Use patent_session_list to see available sessions."
+            "error": f"Session '{session_id}' not found. Use patent_session_list to see available sessions.",
+            "isError": True,
         }
 
 
@@ -194,6 +196,7 @@ def patent_session_list(limit: int = 20) -> dict[str, Any]:
             for s in summaries
         ],
         "total": len(summaries),
+        "isError": False,
     }
 
 
@@ -211,9 +214,9 @@ def patent_session_note(session_id: str, note: str) -> dict[str, Any]:
     sm = _get_session_manager()
     try:
         sm.add_note(session_id, note)
-        return {"session_id": session_id, "status": "note added"}
+        return {"session_id": session_id, "status": "note added", "isError": False}
     except FileNotFoundError:
-        return {"error": f"Session '{session_id}' not found."}
+        return {"error": f"Session '{session_id}' not found.", "isError": True}
 
 
 @mcp.tool()
@@ -242,9 +245,10 @@ def patent_session_annotate(
             "patent_id": patent_id,
             "relevance": relevance,
             "status": "annotated",
+            "isError": False,
         }
     except FileNotFoundError:
-        return {"error": f"Session '{session_id}' not found."}
+        return {"error": f"Session '{session_id}' not found.", "isError": True}
 
 
 @mcp.tool()
@@ -265,9 +269,9 @@ def patent_session_export(
     try:
         out_path = Path(output_path) if output_path else None
         report_path = sm.export_markdown(session_id, out_path)
-        return {"report_path": str(report_path), "status": "exported"}
+        return {"report_path": str(report_path), "status": "exported", "isError": False}
     except FileNotFoundError:
-        return {"error": f"Session '{session_id}' not found."}
+        return {"error": f"Session '{session_id}' not found.", "isError": True}
 
 
 # ---------------------------------------------------------------------------
@@ -485,6 +489,7 @@ def patent_search_natural(
             for s in scored
         ],
         "elapsed_ms": elapsed_ms,
+        "isError": False,
     }
 
 
@@ -588,6 +593,7 @@ def patent_search_structured(
         "queries_run": queries_run,
         "total_found": len(deduped),
         "results": [_hit_to_dict(h) for h in deduped],
+        "isError": False,
     }
 
 
@@ -666,7 +672,7 @@ def patent_citation_chain(
         except Exception as e:
             log.warning("Failed to save citation chain to session: %s", e)
 
-    return tree
+    return {**tree, "isError": False}
 
 
 @mcp.tool()
@@ -735,6 +741,7 @@ def patent_classification_search(
         "date_to": date_to,
         "total_found": len(hits),
         "results": [_hit_to_dict(h) for h in hits],
+        "isError": False,
     }
 
 
@@ -784,6 +791,7 @@ def patent_family_search(
         "patent_id": patent_id,
         "family_size": len(family_members),
         "members": family_members,
+        "isError": False,
     }
 
 
@@ -855,6 +863,7 @@ def patent_suggest_queries(
             "tip": f"A patent published after {prior_art_cutoff} can still be prior art if its application was filed before that date",
         }
 
+    suggestions["isError"] = False
     return suggestions
 
 
@@ -890,6 +899,7 @@ def patent_search_profile_login_start(
         return {
             "error": f"Profile '{name}' is busy ({lock_info.purpose}, pid={lock_info.pid}). "
             f"Close the existing browser or wait for the search to finish.",
+            "isError": True,
         }
 
     # Launch headed browser in background thread
@@ -944,6 +954,7 @@ def patent_search_profile_login_start(
             f"Log into Google manually, then close the browser window. "
             f"Subsequent searches will reuse the saved login state."
         ),
+        "isError": False,
     }
 
 

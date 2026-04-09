@@ -1,4 +1,5 @@
 """MCP server — fetch patents by ID, cache everything."""
+
 from __future__ import annotations
 
 import logging
@@ -31,12 +32,13 @@ from patent_mcp.journal import ActivityJournal  # noqa: E402
 # MCP Tool I/O types
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class PatentFetchResult:
-    patent_id: str          # raw input
-    canonical_id: str       # normalized
-    status: str             # "fetched" | "cached" | "partial" | "error"
-    files: dict[str, str]   # format → absolute path string
+    patent_id: str  # raw input
+    canonical_id: str  # normalized
+    status: str  # "fetched" | "cached" | "partial" | "error"
+    files: dict[str, str]  # format → absolute path string
     metadata: dict[str, Any]
     sources: list[dict]
     fetch_duration_ms: float
@@ -56,15 +58,19 @@ class FetchSummary:
 # Token budget
 # ---------------------------------------------------------------------------
 
+
 def _estimate_tokens(text: str) -> int:
     """Rough token estimate: 4 chars ≈ 1 token."""
     return len(text) // 4
 
 
-def _truncate_if_needed(result_dict: dict, max_tokens: int = MAX_RESPONSE_TOKENS) -> dict:
+def _truncate_if_needed(
+    result_dict: dict, max_tokens: int = MAX_RESPONSE_TOKENS
+) -> dict:
     """Truncate large text fields (abstract, title) to fit token budget.
     File paths are NEVER truncated."""
     import json
+
     result_str = json.dumps(result_dict)
     if _estimate_tokens(result_str) <= max_tokens:
         return result_dict
@@ -85,6 +91,7 @@ def _truncate_if_needed(result_dict: dict, max_tokens: int = MAX_RESPONSE_TOKENS
 # ---------------------------------------------------------------------------
 # Server construction
 # ---------------------------------------------------------------------------
+
 
 def _build_server(config=None):
     """Build and return the FastMCP server instance."""
@@ -128,13 +135,15 @@ def _build_server(config=None):
         if postprocess_query:
             log.warning(
                 "postprocess_query not yet implemented in v1; stored for future use. "
-                "Value: %r", postprocess_query
+                "Value: %r",
+                postprocess_query,
             )
 
         if not patent_ids:
             return {
                 "results": [],
                 "summary": asdict(FetchSummary(0, 0, 0, 0, 0.0)),
+                "isError": False,
             }
 
         start_total = time.monotonic()
@@ -210,29 +219,34 @@ def _build_server(config=None):
                 status = "error"
                 n_errors += 1
 
-            results.append(PatentFetchResult(
-                patent_id=raw_id,
-                canonical_id=orc_result.canonical_id,
-                status=status,
-                files=files_str,
-                metadata=meta_dict,
-                sources=sources,
-                fetch_duration_ms=0.0,
-                error=orc_result.error,
-            ))
+            results.append(
+                PatentFetchResult(
+                    patent_id=raw_id,
+                    canonical_id=orc_result.canonical_id,
+                    status=status,
+                    files=files_str,
+                    metadata=meta_dict,
+                    sources=sources,
+                    fetch_duration_ms=0.0,
+                    error=orc_result.error,
+                )
+            )
 
         total_ms = (time.monotonic() - start_total) * 1000
         response = {
             "results": [asdict(r) for r in results],
-            "summary": asdict(FetchSummary(
-                total=len(results),
-                success=n_success,
-                cached=n_cached,
-                errors=n_errors,
-                total_duration_ms=total_ms,
-            )),
+            "summary": asdict(
+                FetchSummary(
+                    total=len(results),
+                    success=n_success,
+                    cached=n_cached,
+                    errors=n_errors,
+                    total_duration_ms=total_ms,
+                )
+            ),
         }
         journal.log_fetch(patent_ids, response["summary"])
+        response["isError"] = False
         return _truncate_if_needed(response)
 
     # ------------------------------------------------------------------
@@ -250,6 +264,7 @@ def _build_server(config=None):
                 for e in entries
             ],
             "count": len(entries),
+            "isError": False,
         }
 
     # ------------------------------------------------------------------
@@ -269,31 +284,35 @@ def _build_server(config=None):
             hit = cache.lookup(canon.canonical)
             if hit:
                 m = hit.metadata
-                results.append({
-                    "patent_id": raw_id,
-                    "canonical_id": canon.canonical,
-                    "metadata": {
-                        "title": m.title,
-                        "abstract": m.abstract,
-                        "inventors": m.inventors,
-                        "assignee": m.assignee,
-                        "filing_date": m.filing_date,
-                        "publication_date": m.publication_date,
-                        "jurisdiction": m.jurisdiction,
-                        "doc_type": m.doc_type,
-                    },
-                })
+                results.append(
+                    {
+                        "patent_id": raw_id,
+                        "canonical_id": canon.canonical,
+                        "metadata": {
+                            "title": m.title,
+                            "abstract": m.abstract,
+                            "inventors": m.inventors,
+                            "assignee": m.assignee,
+                            "filing_date": m.filing_date,
+                            "publication_date": m.publication_date,
+                            "jurisdiction": m.jurisdiction,
+                            "doc_type": m.doc_type,
+                        },
+                    }
+                )
             else:
-                results.append({
-                    "patent_id": raw_id,
-                    "canonical_id": canon.canonical,
-                    "metadata": None,
-                })
+                results.append(
+                    {
+                        "patent_id": raw_id,
+                        "canonical_id": canon.canonical,
+                        "metadata": None,
+                    }
+                )
 
         found = sum(1 for r in results if r["metadata"] is not None)
         missing = len(results) - found
         journal.log_metadata(patent_ids, found, missing)
-        return {"results": results}
+        return {"results": results, "isError": False}
 
     return mcp
 
@@ -301,6 +320,7 @@ def _build_server(config=None):
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
+
 
 def run_server(cache_dir: str | None = None, log_level: str = "info") -> None:
     """Start the MCP server on stdin/stdout."""

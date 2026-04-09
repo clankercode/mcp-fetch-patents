@@ -31,13 +31,13 @@ pub struct SerpApiGooglePatentsBackend {
 }
 
 impl SerpApiGooglePatentsBackend {
-    pub fn new(api_key: String, base_url: Option<String>, client: Option<Client>) -> Self {
+    pub fn new(api_key: String, base_url: Option<String>, timeout: Duration, client: Option<Client>) -> Self {
         Self {
             api_key,
             base_url: base_url.unwrap_or_else(|| "https://serpapi.com/search".to_string()),
             client: client.unwrap_or_else(|| {
                 Client::builder()
-                    .timeout(Duration::from_secs(30))
+                    .timeout(timeout)
                     .build()
                     .unwrap_or_else(|_| Client::new())
             }),
@@ -179,13 +179,13 @@ pub struct UsptoTextSearchBackend {
 }
 
 impl UsptoTextSearchBackend {
-    pub fn new(base_url: Option<String>, client: Option<Client>) -> Self {
+    pub fn new(base_url: Option<String>, timeout: Duration, client: Option<Client>) -> Self {
         Self {
             base_url: base_url
                 .unwrap_or_else(|| "https://ppubs.uspto.gov/ppubs-api/v1".to_string()),
             client: client.unwrap_or_else(|| {
                 Client::builder()
-                    .timeout(Duration::from_secs(30))
+                    .timeout(timeout)
                     .build()
                     .unwrap_or_else(|_| Client::new())
             }),
@@ -329,6 +329,7 @@ impl EpoOpsSearchBackend {
         client_id: Option<String>,
         client_secret: Option<String>,
         base_url: Option<String>,
+        timeout: Duration,
         client: Option<Client>,
     ) -> Self {
         let base = base_url
@@ -351,7 +352,7 @@ impl EpoOpsSearchBackend {
             }),
             client: client.unwrap_or_else(|| {
                 Client::builder()
-                    .timeout(Duration::from_secs(30))
+                    .timeout(timeout)
                     .build()
                     .unwrap_or_else(|_| Client::new())
             }),
@@ -1527,7 +1528,7 @@ mod tests {
 
     #[test]
     fn epo_ops_constructor_default_urls() {
-        let backend = EpoOpsSearchBackend::new(None, None, None, None);
+        let backend = EpoOpsSearchBackend::new(None, None, None, Duration::from_secs(30), None);
         assert_eq!(
             backend.base_url,
             "https://ops.epo.org/3.2/rest-services"
@@ -1544,6 +1545,7 @@ mod tests {
             None,
             None,
             Some("https://custom.epo.org/rest-services".to_string()),
+            Duration::from_secs(30),
             None,
         );
         assert_eq!(backend.base_url, "https://custom.epo.org/rest-services");
@@ -1559,6 +1561,7 @@ mod tests {
             None,
             None,
             Some("https://custom.epo.org/api".to_string()),
+            Duration::from_secs(30),
             None,
         );
         assert_eq!(backend.auth_url, "https://custom.epo.org/api/auth/accesstoken");
@@ -1568,7 +1571,7 @@ mod tests {
     fn epo_ops_get_oauth_token_no_credentials() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let backend = EpoOpsSearchBackend::new(None, None, None, None);
+            let backend = EpoOpsSearchBackend::new(None, None, None, Duration::from_secs(30), None);
             let token = backend.get_oauth_token().await.unwrap();
             assert!(token.is_none());
         });
@@ -1576,14 +1579,14 @@ mod tests {
 
     #[test]
     fn serpapi_constructor_default_url() {
-        let backend = SerpApiGooglePatentsBackend::new("test-key".to_string(), None, None);
+        let backend = SerpApiGooglePatentsBackend::new("test-key".to_string(), None, Duration::from_secs(30), None);
         assert_eq!(backend.api_key, "test-key");
         assert_eq!(backend.base_url, "https://serpapi.com/search");
     }
 
     #[test]
     fn uspto_constructor_default_url() {
-        let backend = UsptoTextSearchBackend::new(None, None);
+        let backend = UsptoTextSearchBackend::new(None, Duration::from_secs(30), None);
         assert_eq!(
             backend.base_url,
             "https://ppubs.uspto.gov/ppubs-api/v1"
