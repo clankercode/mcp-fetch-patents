@@ -94,6 +94,16 @@ impl RpcResponse {
             }),
         )
     }
+
+    fn tool_err_with_data(id: Value, _code: i64, message: &str, data: &serde_json::Value) -> Self {
+        RpcResponse::ok(
+            id,
+            serde_json::json!({
+                "content": [{"type": "text", "text": serde_json::to_string(data).unwrap_or_else(|_| message.to_string())}],
+                "isError": true
+            }),
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -840,29 +850,33 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
             let (uspto_result, epo_result, google_result) = tokio::join!(
                 async {
                     if !want_uspto {
-                        return (vec![], None);
+                        return (vec![], None, None);
                     }
                     let df = date_from.as_deref().map(|s| s.replace("-", ""));
                     let dt = date_to.as_deref().map(|s| s.replace("-", ""));
-                    let hits = ctx
+                    match ctx
                         .backends
                         .uspto
                         .search(&query, df.as_deref(), dt.as_deref(), max_results)
                         .await
-                        .unwrap_or_else(|e| {
+                    {
+                        Ok(hits) => {
+                            let qr = Some(
+                                serde_json::json!({"source": "USPTO", "query": query, "result_count": hits.len()}),
+                            );
+                            (hits, qr, None)
+                        }
+                        Err(e) => {
                             warn!("USPTO search failed: {}", e);
-                            vec![]
-                        });
-                    let qr = Some(
-                        serde_json::json!({"source": "USPTO", "query": query, "result_count": hits.len()}),
-                    );
-                    (hits, qr)
+                            (vec![], None, Some(format!("USPTO: {}", e)))
+                        }
+                    }
                 },
                 async {
                     if !want_epo {
-                        return (vec![], None);
+                        return (vec![], None, None);
                     }
-                    let hits = ctx
+                    match ctx
                         .backends
                         .epo
                         .search(
@@ -872,24 +886,28 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                             max_results,
                         )
                         .await
-                        .unwrap_or_else(|e| {
+                    {
+                        Ok(hits) => {
+                            let qr = Some(
+                                serde_json::json!({"source": "EPO_OPS", "query": query, "result_count": hits.len()}),
+                            );
+                            (hits, qr, None)
+                        }
+                        Err(e) => {
                             warn!("EPO OPS search failed: {}", e);
-                            vec![]
-                        });
-                    let qr = Some(
-                        serde_json::json!({"source": "EPO_OPS", "query": query, "result_count": hits.len()}),
-                    );
-                    (hits, qr)
+                            (vec![], None, Some(format!("EPO_OPS: {}", e)))
+                        }
+                    }
                 },
                 async {
                     if !want_google {
-                        return (vec![], None);
+                        return (vec![], None, None);
                     }
                     let serp = match ctx.backends.serpapi.as_ref() {
                         Some(s) => s,
-                        None => return (vec![], None),
+                        None => return (vec![], None, None),
                     };
-                    let hits = serp
+                    match serp
                         .search(
                             &query,
                             date_from.as_deref(),
@@ -900,31 +918,45 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                             max_results,
                         )
                         .await
-                        .unwrap_or_else(|e| {
+                    {
+                        Ok(hits) => {
+                            let qr = Some(
+                                serde_json::json!({"source": "Google_Patents", "query": query, "result_count": hits.len()}),
+                            );
+                            (hits, qr, None)
+                        }
+                        Err(e) => {
                             warn!("SerpAPI search failed: {}", e);
-                            vec![]
-                        });
-                    let qr = Some(
-                        serde_json::json!({"source": "Google_Patents", "query": query, "result_count": hits.len()}),
-                    );
-                    (hits, qr)
+                            (vec![], None, Some(format!("SerpAPI: {}", e)))
+                        }
+                    }
                 },
             );
 
             let mut all_results: Vec<crate::ranking::PatentHit> = Vec::new();
             let mut queries_run: Vec<Value> = Vec::new();
+            let mut backend_errors: Vec<String> = Vec::new();
 
             if let Some(qr) = uspto_result.1 {
                 queries_run.push(qr);
                 all_results.extend(uspto_result.0);
             }
+            if let Some(e) = uspto_result.2 {
+                backend_errors.push(e);
+            }
             if let Some(qr) = epo_result.1 {
                 queries_run.push(qr);
                 all_results.extend(epo_result.0);
             }
+            if let Some(e) = epo_result.2 {
+                backend_errors.push(e);
+            }
             if let Some(qr) = google_result.1 {
                 queries_run.push(qr);
                 all_results.extend(google_result.0);
+            }
+            if let Some(e) = google_result.2 {
+                backend_errors.push(e);
             }
 
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -969,6 +1001,7 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                     "relevance": h.relevance,
                     "url": h.url,
                 })).collect::<Vec<_>>(),
+                "backend_errors": if backend_errors.is_empty() { Value::Null } else { serde_json::json!(backend_errors) },
             });
 
             RpcResponse::tool_ok(id, &payload)
@@ -1369,7 +1402,12 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                         "patent_id": patent_id,
                         "session_id": session_id,
                     });
-                    RpcResponse::tool_ok(id, &payload)
+                    RpcResponse::tool_err_with_data(
+                        id,
+                        -32000,
+                        "Patent not found in session",
+                        &payload,
+                    )
                 }
                 Err(e) => RpcResponse::tool_err(id, &format!("Annotate error: {}", e)),
             }
@@ -1413,7 +1451,7 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                         "message": format!("Session '{}' not found.", session_id),
                         "session_id": session_id,
                     });
-                    RpcResponse::tool_ok(id, &payload)
+                    RpcResponse::tool_err_with_data(id, -32001, "Session not found", &payload)
                 }
                 Err(e) => RpcResponse::tool_err(id, &format!("Delete error: {}", e)),
             }

@@ -65,29 +65,30 @@ impl SerpApiGooglePatentsBackend {
             params.push(("type", pt.to_string()));
         }
 
-        let resp = match self.client.get(&self.base_url).query(&params).send().await {
-            Ok(r) => r,
-            Err(e) => {
+        let resp = self
+            .client
+            .get(&self.base_url)
+            .query(&params)
+            .send()
+            .await
+            .map_err(|e| {
                 warn!("SerpAPI Google Patents request failed: {}", e);
-                return Ok(vec![]);
-            }
-        };
+                anyhow::anyhow!("SerpAPI Google Patents request failed: {}", e)
+            })?;
 
         if !resp.status().is_success() {
-            warn!(
+            let status = resp.status().as_u16();
+            warn!("SerpAPI Google Patents HTTP error {}", status);
+            return Err(anyhow::anyhow!(
                 "SerpAPI Google Patents HTTP error {}",
-                resp.status().as_u16()
-            );
-            return Ok(vec![]);
+                status
+            ));
         }
 
-        let data: serde_json::Value = match resp.json().await {
-            Ok(d) => d,
-            Err(e) => {
-                warn!("SerpAPI Google Patents JSON parse error: {}", e);
-                return Ok(vec![]);
-            }
-        };
+        let data: serde_json::Value = resp.json().await.map_err(|e| {
+            warn!("SerpAPI Google Patents JSON parse error: {}", e);
+            anyhow::anyhow!("SerpAPI Google Patents JSON parse error: {}", e)
+        })?;
 
         let organic = data
             .get("organic_results")

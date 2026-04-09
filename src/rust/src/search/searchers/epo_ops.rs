@@ -87,33 +87,28 @@ impl EpoOpsSearchBackend {
             ("client_secret", client_secret),
         ];
 
-        let resp = match self
+        let resp = self
             .client
             .post(&self.auth_url)
             .header("Content-Type", "application/x-www-form-urlencoded")
             .form(&form_data)
             .send()
             .await
-        {
-            Ok(r) => r,
-            Err(e) => {
+            .map_err(|e| {
                 warn!("EPO OPS OAuth request failed: {}", e);
-                return Ok(None);
-            }
-        };
+                anyhow::anyhow!("EPO OPS OAuth request failed: {}", e)
+            })?;
 
         if !resp.status().is_success() {
-            warn!("EPO OPS OAuth failed: HTTP {}", resp.status().as_u16());
-            return Ok(None);
+            let status = resp.status().as_u16();
+            warn!("EPO OPS OAuth failed: HTTP {}", status);
+            return Err(anyhow::anyhow!("EPO OPS OAuth failed: HTTP {}", status));
         }
 
-        let data: serde_json::Value = match resp.json().await {
-            Ok(d) => d,
-            Err(e) => {
-                warn!("EPO OPS OAuth JSON parse error: {}", e);
-                return Ok(None);
-            }
-        };
+        let data: serde_json::Value = resp.json().await.map_err(|e| {
+            warn!("EPO OPS OAuth JSON parse error: {}", e);
+            anyhow::anyhow!("EPO OPS OAuth JSON parse error: {}", e)
+        })?;
 
         let token = data
             .get("access_token")
@@ -174,24 +169,22 @@ impl EpoOpsSearchBackend {
         let range = format!("1-{}", max_results);
         let params = [("q", cql.as_str()), ("Range", range.as_str())];
 
-        let resp = match self
+        let resp = self
             .client
             .get(&url)
             .headers(headers)
             .query(&params)
             .send()
             .await
-        {
-            Ok(r) => r,
-            Err(e) => {
+            .map_err(|e| {
                 warn!("EPO OPS search request failed: {}", e);
-                return Ok(vec![]);
-            }
-        };
+                anyhow::anyhow!("EPO OPS search request failed: {}", e)
+            })?;
 
         if !resp.status().is_success() {
-            warn!("EPO OPS search HTTP error {}", resp.status().as_u16());
-            return Ok(vec![]);
+            let status = resp.status().as_u16();
+            warn!("EPO OPS search HTTP error {}", status);
+            return Err(anyhow::anyhow!("EPO OPS search HTTP error {}", status));
         }
 
         let content_type = resp
@@ -202,22 +195,16 @@ impl EpoOpsSearchBackend {
             .to_string();
 
         if content_type.contains("json") {
-            let data: serde_json::Value = match resp.json().await {
-                Ok(d) => d,
-                Err(e) => {
-                    warn!("EPO OPS search JSON parse error: {}", e);
-                    return Ok(vec![]);
-                }
-            };
+            let data: serde_json::Value = resp.json().await.map_err(|e| {
+                warn!("EPO OPS search JSON parse error: {}", e);
+                anyhow::anyhow!("EPO OPS search JSON parse error: {}", e)
+            })?;
             Ok(Self::parse_json_response(&data))
         } else {
-            let text = match resp.text().await {
-                Ok(t) => t,
-                Err(e) => {
-                    warn!("EPO OPS search body read error: {}", e);
-                    return Ok(vec![]);
-                }
-            };
+            let text = resp.text().await.map_err(|e| {
+                warn!("EPO OPS search body read error: {}", e);
+                anyhow::anyhow!("EPO OPS search body read error: {}", e)
+            })?;
             Ok(Self::parse_xml_search_response(&text))
         }
     }
@@ -265,21 +252,25 @@ impl EpoOpsSearchBackend {
                 self.base_url, patent_id
             );
 
-            let resp = match self.client.get(&url).headers(headers).send().await {
-                Ok(r) => r,
-                Err(e) => {
+            let resp = self
+                .client
+                .get(&url)
+                .headers(headers)
+                .send()
+                .await
+                .map_err(|e| {
                     warn!("EPO OPS citation fetch failed for {}: {}", patent_id, e);
-                    return Ok(vec![]);
-                }
-            };
+                    anyhow::anyhow!("EPO OPS citation fetch failed for {}: {}", patent_id, e)
+                })?;
 
             if !resp.status().is_success() {
-                warn!(
+                let status = resp.status().as_u16();
+                warn!("EPO OPS citation HTTP error {} for {}", status, patent_id);
+                return Err(anyhow::anyhow!(
                     "EPO OPS citation HTTP error {} for {}",
-                    resp.status().as_u16(),
+                    status,
                     patent_id
-                );
-                return Ok(vec![]);
+                ));
             }
 
             let content_type = resp
@@ -290,22 +281,16 @@ impl EpoOpsSearchBackend {
                 .to_string();
 
             if content_type.contains("json") {
-                let data: serde_json::Value = match resp.json().await {
-                    Ok(d) => d,
-                    Err(e) => {
-                        warn!("EPO OPS citation JSON parse error: {}", e);
-                        return Ok(vec![]);
-                    }
-                };
+                let data: serde_json::Value = resp.json().await.map_err(|e| {
+                    warn!("EPO OPS citation JSON parse error: {}", e);
+                    anyhow::anyhow!("EPO OPS citation JSON parse error: {}", e)
+                })?;
                 Ok(Self::extract_ids_from_json(&data))
             } else {
-                let text = match resp.text().await {
-                    Ok(t) => t,
-                    Err(e) => {
-                        warn!("EPO OPS citation body read error: {}", e);
-                        return Ok(vec![]);
-                    }
-                };
+                let text = resp.text().await.map_err(|e| {
+                    warn!("EPO OPS citation body read error: {}", e);
+                    anyhow::anyhow!("EPO OPS citation body read error: {}", e)
+                })?;
                 Ok(Self::parse_xml_citations_response(&text))
             }
         } else {
@@ -332,21 +317,25 @@ impl EpoOpsSearchBackend {
 
         let url = format!("{}/family/publication/epodoc/{}", self.base_url, patent_id);
 
-        let resp = match self.client.get(&url).headers(headers).send().await {
-            Ok(r) => r,
-            Err(e) => {
+        let resp = self
+            .client
+            .get(&url)
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|e| {
                 warn!("EPO OPS family fetch failed for {}: {}", patent_id, e);
-                return Ok(vec![]);
-            }
-        };
+                anyhow::anyhow!("EPO OPS family fetch failed for {}: {}", patent_id, e)
+            })?;
 
         if !resp.status().is_success() {
-            warn!(
+            let status = resp.status().as_u16();
+            warn!("EPO OPS family HTTP error {} for {}", status, patent_id);
+            return Err(anyhow::anyhow!(
                 "EPO OPS family HTTP error {} for {}",
-                resp.status().as_u16(),
+                status,
                 patent_id
-            );
-            return Ok(vec![]);
+            ));
         }
 
         let content_type = resp
@@ -357,22 +346,16 @@ impl EpoOpsSearchBackend {
             .to_string();
 
         if content_type.contains("json") {
-            let data: serde_json::Value = match resp.json().await {
-                Ok(d) => d,
-                Err(e) => {
-                    warn!("EPO OPS family JSON parse error: {}", e);
-                    return Ok(vec![]);
-                }
-            };
+            let data: serde_json::Value = resp.json().await.map_err(|e| {
+                warn!("EPO OPS family JSON parse error: {}", e);
+                anyhow::anyhow!("EPO OPS family JSON parse error: {}", e)
+            })?;
             Ok(Self::parse_family_json(&data))
         } else {
-            let text = match resp.text().await {
-                Ok(t) => t,
-                Err(e) => {
-                    warn!("EPO OPS family body read error: {}", e);
-                    return Ok(vec![]);
-                }
-            };
+            let text = resp.text().await.map_err(|e| {
+                warn!("EPO OPS family body read error: {}", e);
+                anyhow::anyhow!("EPO OPS family body read error: {}", e)
+            })?;
             Ok(Self::parse_xml_family_response(&text))
         }
     }

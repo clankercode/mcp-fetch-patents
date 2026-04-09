@@ -51,29 +51,30 @@ impl UsptoTextSearchBackend {
 
         let url = format!("{}/query", self.base_url.trim_end_matches('/'));
 
-        let resp = match self.client.post(&url).json(&body).send().await {
-            Ok(r) => r,
-            Err(e) => {
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| {
                 warn!("USPTO PPUBS text search request failed: {}", e);
-                return Ok(vec![]);
-            }
-        };
+                anyhow::anyhow!("USPTO PPUBS text search request failed: {}", e)
+            })?;
 
         if !resp.status().is_success() {
-            warn!(
+            let status = resp.status().as_u16();
+            warn!("USPTO PPUBS text search HTTP error {}", status);
+            return Err(anyhow::anyhow!(
                 "USPTO PPUBS text search HTTP error {}",
-                resp.status().as_u16()
-            );
-            return Ok(vec![]);
+                status
+            ));
         }
 
-        let data: serde_json::Value = match resp.json().await {
-            Ok(d) => d,
-            Err(e) => {
-                warn!("USPTO PPUBS JSON parse error: {}", e);
-                return Ok(vec![]);
-            }
-        };
+        let data: serde_json::Value = resp.json().await.map_err(|e| {
+            warn!("USPTO PPUBS JSON parse error: {}", e);
+            anyhow::anyhow!("USPTO PPUBS JSON parse error: {}", e)
+        })?;
 
         let patents = data
             .get("patents")
