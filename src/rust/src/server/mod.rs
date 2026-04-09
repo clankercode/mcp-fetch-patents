@@ -148,6 +148,7 @@ fn tools_list() -> Value {
                         "max_results": {"type": "integer", "default": 25, "description": "Maximum results after ranking."},
                         "backend": {"type": "string", "default": "auto", "description": "Search backend: \"browser\", \"serpapi\", or \"auto\"."},
                         "enrich_top_n": {"type": "integer", "description": "Enrich top N results with full metadata via fetch pipeline. Default from config."},
+                        "profile_name": {"type": "string", "description": "Browser profile to use for browser-backed search."},
                         "debug": {"type": "boolean", "default": false}
                     },
                     "required": ["description"]
@@ -584,9 +585,12 @@ async fn execute_tool_call(
             let session_id = get_str_param(&params, "session_id");
             let max_results = get_int_param(&params, "max_results").unwrap_or(25) as usize;
             let backend = get_str_param(&params, "backend").unwrap_or_else(|| "auto".to_string());
+            let profile_name = get_str_param(&params, "profile_name")
+                .unwrap_or_else(|| backends.browser_config.profile_name.clone());
             let _enrich_top_n = get_int_param(&params, "enrich_top_n")
                 .unwrap_or(config.search_enrich_top_n as u64) as usize;
             let enrich_top_n = _enrich_top_n;
+            let debug = get_bool_param(&params, "debug").unwrap_or(false);
 
             let start = std::time::Instant::now();
 
@@ -609,13 +613,18 @@ async fn execute_tool_call(
 
             if effective_backend == "browser" || effective_backend == "auto" {
                 let browser_cfg = &backends.browser_config;
+                let debug_dir = if debug {
+                    browser_cfg.debug_html_dir.clone().or_else(|| Some(".patent-debug".into()))
+                } else {
+                    browser_cfg.debug_html_dir.clone()
+                };
                 let browser = crate::search::browser_search::GooglePatentsBrowserSearch::new(
                     browser_cfg.profiles_dir.clone(),
-                    &browser_cfg.profile_name,
+                    &profile_name,
                     browser_cfg.headless,
                     browser_cfg.timeout_ms,
                     browser_cfg.max_pages,
-                    browser_cfg.debug_html_dir.clone(),
+                    debug_dir,
                 );
                 for variant in &intent.query_variants {
                     if hits_by_query.contains_key(&variant.query) {
@@ -642,8 +651,10 @@ async fn execute_tool_call(
                 }
             }
 
-            if (effective_backend == "serpapi" || effective_backend == "auto") ||
-               (effective_backend == "browser" && hits_by_query.is_empty()) {
+            let original_backend = backend.as_str();
+            if effective_backend == "serpapi" ||
+               (effective_backend == "auto") ||
+               (original_backend == "auto" && hits_by_query.is_empty()) {
                 if let Some(ref serp) = backends.serpapi {
                     for variant in &intent.query_variants {
                         if hits_by_query.contains_key(&variant.query) {
@@ -725,6 +736,8 @@ async fn execute_tool_call(
                             metadata: Some(serde_json::json!({
                                 "search_mode": backend,
                                 "planner_concepts": intent.concepts,
+                                "planner_synonyms": intent.synonyms,
+                                "query_variants": intent.query_variants.iter().map(|v| &v.query).collect::<Vec<_>>(),
                             })),
                         };
                         session.queries.push(record);
@@ -742,8 +755,8 @@ async fn execute_tool_call(
                     "concepts": intent.concepts,
                     "query_variant_count": intent.query_variants.len(),
                     "rationale": intent.rationale,
+                    "synonyms_expanded": intent.synonyms.keys().collect::<Vec<_>>(),
                 },
-                "synonyms_expanded": intent.synonyms,
                 "queries_run": queries_run,
                 "total_found": scored.len(),
                 "enriched_ids": enriched_ids,
@@ -976,6 +989,8 @@ async fn execute_tool_call(
             let payload = serde_json::json!({
                 "code": code,
                 "include_subclasses": include_subclasses,
+                "date_from": date_from,
+                "date_to": date_to,
                 "total_found": hits.len(),
                 "results": hits.iter().map(|h| serde_json::json!({
                     "patent_id": h.patent_id,
@@ -1037,22 +1052,26 @@ async fn execute_tool_call(
                     "action": format!("patent_search_natural(description=\"{}\", backend=\"auto\")", topic.chars().take(80).collect::<String>()),
                 },
                 "step_2_classification": {
-                    "description": "Find IPC/CPC class codes",
+                    "description": "Find IPC/CPC class codes — searches by class find patents regardless of keyword",
                     "action": "Use patent_classification_search with codes from the relevant technology area",
+                    "tip": "Start with a broad code like 'H02J' and explore subclasses",
                 },
                 "step_3_citation_chain": {
                     "description": "After finding any relevant patent, follow its citations",
                     "action": "Use patent_citation_chain on the most relevant results (direction='both', depth=2)",
+                    "why": "The best prior art is often found 1-2 hops away in citation chains",
                 },
             });
 
             if prior_art_cutoff.is_some() {
+                let cutoff = prior_art_cutoff.as_deref().unwrap_or("");
                 strategy.as_object_mut().unwrap().insert(
                     "prior_art_notes".to_string(),
-                    serde_json::json!(format!(
-                        "Results before {} are potential prior art. Focus on forward citations of the most relevant early patents.",
-                        prior_art_cutoff.as_deref().unwrap_or("")
-                    )),
+                    serde_json::json!({
+                        "cutoff_date": cutoff,
+                        "reminder": format!("Search for patents filed/published BEFORE {}", cutoff),
+                        "tip": format!("A patent published after {} can still be prior art if its application was filed before that date", cutoff),
+                    }),
                 );
             }
 
@@ -1151,7 +1170,7 @@ async fn execute_tool_call(
             let session_id = get_str_param(&params, "session_id").unwrap_or_default();
             let patent_id = get_str_param(&params, "patent_id").unwrap_or_default();
             let annotation = get_str_param(&params, "annotation").unwrap_or_default();
-            let relevance = get_str_param(&params, "relevance").unwrap_or_else(|| "unknown".to_string());
+            let relevance = get_str_param(&params, "relevance").unwrap_or_else(|| "high".to_string());
 
             let sm = &backends.session_manager;
             match sm.annotate_patent(&session_id, &patent_id, &annotation, &relevance) {
@@ -1213,7 +1232,7 @@ async fn execute_tool_call(
                 .arg("--no-sandbox")
                 .window_size(1280, 900)
                 .user_data_dir(&profile_dir)
-                .arg("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+                .arg(format!("--user-agent={}", crate::search::browser_search::BROWSER_USER_AGENT))
                 .build()
             {
                 Ok(c) => c,
@@ -1851,7 +1870,8 @@ mod tests {
         assert_eq!(payload["topic"], "wireless power transfer");
         assert!(payload["planner_output"]["concepts"].is_array());
         assert!(payload["planner_output"]["query_variants"].is_array());
-        assert!(payload["strategy"]["prior_art_notes"].is_string());
+        assert!(payload["strategy"]["prior_art_notes"].is_object());
+        assert_eq!(payload["strategy"]["prior_art_notes"]["cutoff_date"], "2020-01-01");
     }
 
     #[tokio::test]

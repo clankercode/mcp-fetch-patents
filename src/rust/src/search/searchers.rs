@@ -7,7 +7,6 @@ use tracing::warn;
 
 use crate::ranking::PatentHit;
 
-
 pub struct SerpApiGooglePatentsBackend {
     api_key: String,
     base_url: String,

@@ -1,5 +1,4 @@
-use std::collections::HashSet;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -137,10 +136,6 @@ impl SessionManager {
         };
         fs::create_dir_all(&dir).ok();
         Self { dir }
-    }
-
-    pub fn sessions_dir(&self) -> &Path {
-        &self.dir
     }
 
     pub fn dir(&self) -> &Path {
@@ -982,7 +977,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         std::env::set_var("PATENT_SESSIONS_DIR", tmp.path().to_str().unwrap());
         let mgr = SessionManager::new(None);
-        assert_eq!(mgr.sessions_dir(), tmp.path());
+        assert_eq!(mgr.dir(), tmp.path());
         std::env::remove_var("PATENT_SESSIONS_DIR");
     }
 

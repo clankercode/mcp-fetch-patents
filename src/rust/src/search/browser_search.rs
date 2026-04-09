@@ -11,6 +11,9 @@ use tracing::warn;
 use crate::ranking::PatentHit;
 use crate::search::profile_manager::ProfileManager;
 
+pub const BROWSER_USER_AGENT: &str =
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+
 static PATENT_HREF_RE: OnceLock<Regex> = OnceLock::new();
 static PATENT_BODY_RE: OnceLock<Regex> = OnceLock::new();
 
@@ -80,7 +83,7 @@ impl GooglePatentsBrowserSearch {
             .no_sandbox()
             .arg("--disable-gpu")
             .window_size(1280, 900)
-            .arg("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36");
+            .arg(format!("--user-agent={}", BROWSER_USER_AGENT));
 
         if !self.headless {
             config_builder = config_builder.with_head();
@@ -227,7 +230,7 @@ async fn extract_patent_hits(page: &Page, debug_html_dir: &Option<PathBuf>) -> V
 
 async fn strategy_structured_elements(page: &Page) -> Vec<PatentHit> {
     let selectors = ["search-result-item", ".result-item", "article"];
-     let patent_id_re = patent_href_re();
+    let patent_id_re = patent_href_re();
 
     for &sel in &selectors {
         let elements = match page.find_elements(sel).await {
@@ -285,7 +288,7 @@ async fn strategy_structured_elements(page: &Page) -> Vec<PatentHit> {
 }
 
 async fn strategy_patent_links(page: &Page) -> Vec<PatentHit> {
-     let patent_id_re = patent_href_re();
+    let patent_id_re = patent_href_re();
 
     let links = match page.find_elements("a[href*='/patent/']").await {
         Ok(l) => l,
