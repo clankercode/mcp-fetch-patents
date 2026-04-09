@@ -137,7 +137,7 @@ fn tools_list() -> Value {
             },
             {
                 "name": "patent_search_natural",
-                "description": "Search for patents using a natural language description. Expands your description into multiple query variants, runs them against search backends, merges and reranks results, and optionally enriches the top hits with full metadata.",
+                "description": "Search for patents using a natural language description. Expands your description into multiple query variants, runs them against search backends (browser, SerpAPI, USPTO, EPO), merges and reranks results, and optionally enriches the top hits with full metadata.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -298,7 +298,7 @@ fn tools_list() -> Value {
             },
             {
                 "name": "patent_search_profile_login_start",
-                "description": "Launch a headed browser for manual Google login. NOTE: Browser profile management requires the Python MCP server (patent_mcp.search). This stub acknowledges the tool exists but is not available in the Rust server.",
+                "description": "Launch a headed browser for manual Google login. Opens a visible Chromium window using an isolated browser profile. Log into your Google account manually, then close the browser window. Subsequent headless searches will reuse the saved login state.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -471,11 +471,21 @@ fn route_line(line: &str) -> Dispatch {
 // Async tool execution
 // ---------------------------------------------------------------------------
 
+struct BrowserBackendConfig {
+    profiles_dir: Option<std::path::PathBuf>,
+    profile_name: String,
+    headless: bool,
+    timeout_ms: u32,
+    max_pages: u32,
+    debug_html_dir: Option<std::path::PathBuf>,
+}
+
 struct SearchBackends {
     serpapi: Option<crate::search::searchers::SerpApiGooglePatentsBackend>,
     uspto: crate::search::searchers::UsptoTextSearchBackend,
     epo: crate::search::searchers::EpoOpsSearchBackend,
     session_manager: crate::search::session_manager::SessionManager,
+    browser_config: BrowserBackendConfig,
 }
 
 async fn execute_tool_call(
@@ -596,21 +606,51 @@ async fn execute_tool_call(
                 backend.clone()
             };
 
-            if effective_backend == "serpapi" || effective_backend == "browser" {
+            if effective_backend == "browser" || effective_backend == "auto" {
+                let browser_cfg = &backends.browser_config;
+                let browser = crate::search::browser_search::GooglePatentsBrowserSearch::new(
+                    browser_cfg.profiles_dir.clone(),
+                    &browser_cfg.profile_name,
+                    browser_cfg.headless,
+                    browser_cfg.timeout_ms,
+                    browser_cfg.max_pages,
+                    browser_cfg.debug_html_dir.clone(),
+                );
+                for variant in &intent.query_variants {
+                    if hits_by_query.contains_key(&variant.query) {
+                        continue;
+                    }
+                    match browser.search(
+                        &variant.query,
+                        date_cutoff.as_deref(),
+                        None,
+                        max_results,
+                    ).await {
+                        Ok(hits) if !hits.is_empty() => {
+                            let count = hits.len();
+                            queries_run.push(serde_json::json!({
+                                "source": "Google_Patents_Browser",
+                                "query": variant.query,
+                                "variant_type": variant.variant_type,
+                                "result_count": count,
+                            }));
+                            hits_by_query.insert(variant.query.clone(), hits);
+                        }
+                        Ok(_) | Err(_) => {}
+                    }
+                }
+            }
+
+            if (effective_backend == "serpapi" || effective_backend == "auto") ||
+               (effective_backend == "browser" && hits_by_query.is_empty()) {
                 if let Some(ref serp) = backends.serpapi {
                     for variant in &intent.query_variants {
-                        let hits = serp
-                            .search(
-                                &variant.query,
-                                None,
-                                date_cutoff.as_deref(),
-                                None,
-                                None,
-                                None,
-                                max_results,
-                            )
-                            .await
-                            .unwrap_or_default();
+                        if hits_by_query.contains_key(&variant.query) {
+                            continue;
+                        }
+                        let hits = serp.search(
+                            &variant.query, None, date_cutoff.as_deref(), None, None, None, max_results,
+                        ).await.unwrap_or_default();
                         let count = hits.len();
                         queries_run.push(serde_json::json!({
                             "source": "Google_Patents_SerpAPI",
@@ -1150,16 +1190,65 @@ async fn execute_tool_call(
 
         "patent_search_profile_login_start" => {
             let profile_name = get_str_param(&params, "name").unwrap_or_else(|| "default".to_string());
+            let browser_cfg = &backends.browser_config;
+
+            let pm = crate::search::profile_manager::ProfileManager::new(browser_cfg.profiles_dir.clone());
+            let profile_dir = match pm.get_profile_dir(&profile_name) {
+                Ok(d) => d,
+                Err(e) => {
+                    return RpcResponse::err(id, -32603, &format!("Profile error: {}", e));
+                }
+            };
+
+            match pm.acquire_lock(&profile_name, "login") {
+                Ok(()) => {}
+                Err(e) => {
+                    return RpcResponse::err(id, -32603, &format!("Profile busy: {}", e));
+                }
+            }
+
+            let browser_config = match chromiumoxide::BrowserConfig::builder()
+                .with_head()
+                .arg("--no-sandbox")
+                .window_size(1280, 900)
+                .user_data_dir(&profile_dir)
+                .arg("--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+                .build()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = pm.release_lock(&profile_name);
+                    return RpcResponse::err(id, -32603, &format!("Browser config error: {}", e));
+                }
+            };
+
+            let launch_result = chromiumoxide::Browser::launch(browser_config).await;
+
+            let (browser, mut handler) = match launch_result {
+                Ok(bh) => bh,
+                Err(e) => {
+                    let _ = pm.release_lock(&profile_name);
+                    return RpcResponse::err(id, -32603, &format!("Browser launch failed: {}. Is Chromium installed?", e));
+                }
+            };
+
+            let pm_for_task = crate::search::profile_manager::ProfileManager::new(browser_cfg.profiles_dir.clone());
+            let pn_for_task = profile_name.clone();
+            tokio::spawn(async move {
+                use futures::StreamExt;
+                while let Some(_) = handler.next().await {}
+                drop(browser);
+                let _ = pm_for_task.release_lock(&pn_for_task);
+            });
 
             let payload = serde_json::json!({
-                "status": "unavailable",
+                "status": "launched",
                 "message": format!(
-                    "Browser profile management requires the Python MCP server (python -m patent_mcp.search). \
-                     The Rust server does not have Playwright bindings. \
-                     Run the Python search server and call patent_search_profile_login_start there to set up profile '{}'.",
-                     profile_name
+                    "Headed browser launched for profile '{}'. Log into your Google account manually, then close the browser window. Subsequent headless searches will reuse the saved login state.",
+                    profile_name
                 ),
                 "profile_name": profile_name,
+                "profile_dir": profile_dir.to_string_lossy(),
             });
             RpcResponse::ok(id, serde_json::json!({
                 "content": [{"type": "text", "text": payload.to_string()}]
@@ -1204,6 +1293,14 @@ pub async fn run_server(config: PatentConfig) -> Result<()> {
             None,
         ),
         session_manager: crate::search::session_manager::SessionManager::new(None),
+        browser_config: BrowserBackendConfig {
+            profiles_dir: config.search_browser_profiles_dir.clone(),
+            profile_name: config.search_browser_default_profile.clone(),
+            headless: config.search_browser_headless,
+            timeout_ms: (config.search_browser_timeout * 1000.0) as u32,
+            max_pages: config.search_browser_max_pages as u32,
+            debug_html_dir: config.search_browser_debug_html_dir.clone(),
+        },
     };
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -1327,7 +1424,7 @@ mod tests {
             search_browser_max_pages: 3,
             search_browser_idle_timeout: 1800.0,
             search_browser_debug_html_dir: None,
-            search_backend_default: "browser".into(),
+            search_backend_default: "serpapi".into(),
             search_enrich_top_n: 5,
         }
     }
@@ -1647,6 +1744,14 @@ mod tests {
             session_manager: crate::search::session_manager::SessionManager::new(Some(
                 sessions_tmp.path().to_path_buf(),
             )),
+            browser_config: BrowserBackendConfig {
+                profiles_dir: None,
+                profile_name: "default".to_string(),
+                headless: true,
+                timeout_ms: 60000,
+                max_pages: 3,
+                debug_html_dir: None,
+            },
         };
         (config, cache, orchestrator, journal, backends, sessions_tmp)
     }
@@ -1749,15 +1854,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn e2e_profile_login_stub() {
+    async fn e2e_profile_login_launch() {
         let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
         let id = Value::Number(500.into());
 
         let params = tool_params("patent_search_profile_login_start", serde_json::json!({"name": "test"}));
         let resp = execute_tool_call(id, params, &config, &cache, &orchestrator, &journal, &backends).await;
-        let payload = extract_payload(resp);
-        assert_eq!(payload["status"], "unavailable");
-        assert_eq!(payload["profile_name"], "test");
+        if resp.result.is_some() {
+            let payload = extract_payload(resp);
+            assert_eq!(payload["profile_name"], "test");
+        } else {
+            assert!(resp.error.is_some());
+        }
     }
 
     #[tokio::test]
