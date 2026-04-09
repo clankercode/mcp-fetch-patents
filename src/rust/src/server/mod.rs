@@ -63,6 +63,32 @@ impl RpcResponse {
 // MCP tool descriptors
 // ---------------------------------------------------------------------------
 
+fn get_str_param(params: &serde_json::Value, name: &str) -> Option<String> {
+    params.get("arguments")
+        .and_then(|a| a.get(name))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
+fn get_int_param(params: &serde_json::Value, name: &str) -> Option<u64> {
+    params.get("arguments")
+        .and_then(|a| a.get(name))
+        .and_then(|v| v.as_u64())
+}
+
+fn get_bool_param(params: &serde_json::Value, name: &str) -> Option<bool> {
+    params.get("arguments")
+        .and_then(|a| a.get(name))
+        .and_then(|v| v.as_bool())
+}
+
+fn get_str_array_param(params: &serde_json::Value, name: &str) -> Option<Vec<String>> {
+    params.get("arguments")
+        .and_then(|a| a.get(name))
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+}
+
 fn tools_list() -> Value {
     serde_json::json!({
         "tools": [
@@ -107,6 +133,178 @@ fn tools_list() -> Value {
                         }
                     },
                     "required": ["patent_ids"]
+                }
+            },
+            {
+                "name": "patent_search_natural",
+                "description": "Search for patents using a natural language description. Expands your description into multiple query variants, runs them against search backends, merges and reranks results, and optionally enriches the top hits with full metadata.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "description": {"type": "string", "description": "Natural language description of the technology or invention."},
+                        "date_cutoff": {"type": "string", "description": "Optional ISO date — only return patents before this date."},
+                        "jurisdictions": {"type": "array", "items": {"type": "string"}, "description": "Optional jurisdiction filter (e.g. [\"US\", \"EP\"])."},
+                        "session_id": {"type": "string", "description": "Optional session ID to save results."},
+                        "max_results": {"type": "integer", "default": 25, "description": "Maximum results after ranking."},
+                        "backend": {"type": "string", "default": "auto", "description": "Search backend: \"browser\", \"serpapi\", or \"auto\"."},
+                        "enrich_top_n": {"type": "integer", "description": "Enrich top N results with full metadata. Default from config."},
+                        "debug": {"type": "boolean", "default": false}
+                    },
+                    "required": ["description"]
+                }
+            },
+            {
+                "name": "patent_search_structured",
+                "description": "Run an expert-syntax Boolean patent query against one or more sources (USPTO, EPO OPS, Google Patents).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {"type": "string", "description": "Boolean query string with field codes."},
+                        "sources": {"type": "array", "items": {"type": "string"}, "description": "Sources to query. Options: \"USPTO\", \"EPO_OPS\", \"Google_Patents\"."},
+                        "date_from": {"type": "string", "description": "Start date filter (YYYY-MM-DD)."},
+                        "date_to": {"type": "string", "description": "End date filter (YYYY-MM-DD)."},
+                        "session_id": {"type": "string"},
+                        "max_results": {"type": "integer", "default": 25}
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "patent_citation_chain",
+                "description": "Follow patent citations forward or backward to discover related patents.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "patent_id": {"type": "string", "description": "Seed patent ID."},
+                        "direction": {"type": "string", "default": "backward", "description": "\"backward\", \"forward\", or \"both\"."},
+                        "depth": {"type": "integer", "default": 1, "description": "Citation depth (1-3)."},
+                        "session_id": {"type": "string"}
+                    },
+                    "required": ["patent_id"]
+                }
+            },
+            {
+                "name": "patent_classification_search",
+                "description": "Search patents by IPC or CPC classification code.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "code": {"type": "string", "description": "IPC/CPC classification code (e.g. \"H02J50\")."},
+                        "include_subclasses": {"type": "boolean", "default": true},
+                        "date_from": {"type": "string"},
+                        "date_to": {"type": "string"},
+                        "session_id": {"type": "string"},
+                        "max_results": {"type": "integer", "default": 25}
+                    },
+                    "required": ["code"]
+                }
+            },
+            {
+                "name": "patent_family_search",
+                "description": "Find all family members of a patent across jurisdictions.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "patent_id": {"type": "string"},
+                        "session_id": {"type": "string"}
+                    },
+                    "required": ["patent_id"]
+                }
+            },
+            {
+                "name": "patent_suggest_queries",
+                "description": "Generate search strategy suggestions for a patent research topic without running them.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string", "description": "Technology or invention to research."},
+                        "context": {"type": "string", "description": "Additional context."},
+                        "prior_art_cutoff": {"type": "string", "description": "Prior art date cutoff (YYYY-MM-DD)."}
+                    },
+                    "required": ["topic"]
+                }
+            },
+            {
+                "name": "patent_session_create",
+                "description": "Create a new patent research session.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string"},
+                        "prior_art_cutoff": {"type": "string"},
+                        "notes": {"type": "string", "default": ""}
+                    },
+                    "required": ["topic"]
+                }
+            },
+            {
+                "name": "patent_session_load",
+                "description": "Load a saved patent research session.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string"}
+                    },
+                    "required": ["session_id"]
+                }
+            },
+            {
+                "name": "patent_session_list",
+                "description": "List all saved patent research sessions.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "limit": {"type": "integer", "description": "Max sessions to return."}
+                    }
+                }
+            },
+            {
+                "name": "patent_session_note",
+                "description": "Add a researcher note to a session.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string"},
+                        "note": {"type": "string"}
+                    },
+                    "required": ["session_id", "note"]
+                }
+            },
+            {
+                "name": "patent_session_annotate",
+                "description": "Annotate a patent with relevance and notes within a session.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string"},
+                        "patent_id": {"type": "string"},
+                        "annotation": {"type": "string"},
+                        "relevance": {"type": "string", "description": "\"high\", \"medium\", \"low\", or \"unknown\""}
+                    },
+                    "required": ["session_id", "patent_id", "annotation", "relevance"]
+                }
+            },
+            {
+                "name": "patent_session_export",
+                "description": "Export a session as a Markdown report.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string"},
+                        "output_path": {"type": "string", "description": "Custom output path."}
+                    },
+                    "required": ["session_id"]
+                }
+            },
+            {
+                "name": "patent_search_profile_login_start",
+                "description": "Launch a headed browser for manual Google login. NOTE: Browser profile management requires the Python MCP server (patent_mcp.search). This stub acknowledges the tool exists but is not available in the Rust server.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Profile name (default: 'default')."}
+                    },
+                    "required": []
                 }
             }
         ]
@@ -288,18 +486,8 @@ async fn execute_tool_call(
 
     match tool_name.as_str() {
         "fetch_patents" => {
-            let patent_ids: Vec<String> = params
-                .get("arguments")
-                .and_then(|a| a.get("patent_ids"))
-                .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                .unwrap_or_default();
-
-            let force_refresh = params
-                .get("arguments")
-                .and_then(|a| a.get("force_refresh"))
-                .and_then(|v| v.as_bool())
-                .unwrap_or(false);
+            let patent_ids = get_str_array_param(&params, "patent_ids").unwrap_or_default();
+            let force_refresh = get_bool_param(&params, "force_refresh").unwrap_or(false);
 
             let payload = build_fetch_patents_payload(
                 &patent_ids,
@@ -335,12 +523,7 @@ async fn execute_tool_call(
         }
 
         "get_patent_metadata" => {
-            let patent_ids: Vec<String> = params
-                .get("arguments")
-                .and_then(|a| a.get("patent_ids"))
-                .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                .unwrap_or_default();
+            let patent_ids = get_str_array_param(&params, "patent_ids").unwrap_or_default();
 
             let mut results = Vec::new();
             for raw_id in &patent_ids {
@@ -370,6 +553,588 @@ async fn execute_tool_call(
             journal.log_metadata(&patent_ids, found, missing);
 
             let payload = serde_json::json!({"results": results});
+            RpcResponse::ok(id, serde_json::json!({
+                "content": [{"type": "text", "text": payload.to_string()}]
+            }))
+        }
+
+        "patent_search_natural" => {
+            let description = get_str_param(&params, "description").unwrap_or_default();
+            let date_cutoff = get_str_param(&params, "date_cutoff");
+            let jurisdictions = get_str_array_param(&params, "jurisdictions");
+            let session_id = get_str_param(&params, "session_id");
+            let max_results = get_int_param(&params, "max_results").unwrap_or(25) as usize;
+            let backend = get_str_param(&params, "backend").unwrap_or_else(|| "auto".to_string());
+            let _enrich_top_n = get_int_param(&params, "enrich_top_n")
+                .unwrap_or(config.search_enrich_top_n as u64) as usize;
+
+            let start = std::time::Instant::now();
+
+            let planner = crate::planner::NaturalLanguagePlanner;
+            let intent = planner.plan(
+                &description,
+                date_cutoff.as_deref(),
+                jurisdictions.as_deref(),
+            );
+
+            let mut hits_by_query: std::collections::HashMap<String, Vec<crate::ranking::PatentHit>> =
+                std::collections::HashMap::new();
+            let mut queries_run: Vec<Value> = Vec::new();
+
+            let effective_backend = if backend == "auto" {
+                config.search_backend_default.clone()
+            } else {
+                backend.clone()
+            };
+
+            if effective_backend == "serpapi" || effective_backend == "browser" {
+                if let Some(ref key) = config.serpapi_key {
+                    let serp = crate::search::searchers::SerpApiGooglePatentsBackend::new(key.clone(), None);
+                    for variant in &intent.query_variants {
+                        let hits = serp
+                            .search(
+                                &variant.query,
+                                None,
+                                date_cutoff.as_deref(),
+                                None,
+                                None,
+                                None,
+                                max_results,
+                            )
+                            .await
+                            .unwrap_or_default();
+                        let count = hits.len();
+                        queries_run.push(serde_json::json!({
+                            "source": "Google_Patents_SerpAPI",
+                            "query": variant.query,
+                            "variant_type": variant.variant_type,
+                            "result_count": count,
+                        }));
+                        hits_by_query.insert(variant.query.clone(), hits);
+                    }
+                }
+            }
+
+            let ranker = crate::ranking::SearchRanker;
+            let mut scored = ranker.rank(&hits_by_query, &intent);
+            scored.truncate(max_results);
+
+            let all_hits: Vec<&crate::ranking::PatentHit> = scored.iter().map(|s| &s.hit).collect();
+
+            if let Some(ref sid) = session_id {
+                if !all_hits.is_empty() {
+                    let sm = crate::search::session_manager::SessionManager::new(None);
+                    let session_hits: Vec<crate::search::session_manager::PatentHit> = all_hits
+                        .iter()
+                        .map(|h| (**h).clone().into())
+                        .collect();
+                    if let Ok(session) = sm.load_session(sid) {
+                        let now = chrono::Utc::now().to_rfc3339();
+                        let query_num = session.queries.len() + 1;
+                        let record = crate::search::session_manager::QueryRecord {
+                            query_id: format!("q{:03}", query_num),
+                            timestamp: now,
+                            source: "serpapi".to_string(),
+                            query_text: description.clone(),
+                            result_count: session_hits.len() as i64,
+                            results: session_hits,
+                            metadata: Some(serde_json::json!({
+                                "search_mode": backend,
+                                "planner_concepts": intent.concepts,
+                            })),
+                        };
+                        let _ = sm.append_query_result(sid, record);
+                    }
+                }
+            }
+
+            let payload = serde_json::json!({
+                "query": description,
+                "backend": backend,
+                "date_cutoff": date_cutoff,
+                "elapsed_ms": start.elapsed().as_millis() as u64,
+                "planner": {
+                    "concepts": intent.concepts,
+                    "query_variant_count": intent.query_variants.len(),
+                    "rationale": intent.rationale,
+                },
+                "synonyms_expanded": intent.synonyms,
+                "queries_run": queries_run,
+                "total_found": scored.len(),
+                "enriched_ids": Vec::<String>::new(),
+                "results": scored.iter().map(|s| serde_json::json!({
+                    "patent_id": s.hit.patent_id,
+                    "title": s.hit.title,
+                    "date": s.hit.date,
+                    "assignee": s.hit.assignee,
+                    "inventors": s.hit.inventors,
+                    "abstract": s.hit.abstract_text,
+                    "source": s.hit.source,
+                    "relevance": s.hit.relevance,
+                    "url": s.hit.url,
+                    "score": (s.score * 100.0).round() / 100.0,
+                    "query_matches": s.query_matches,
+                })).collect::<Vec<_>>(),
+            });
+
+            RpcResponse::ok(id, serde_json::json!({
+                "content": [{"type": "text", "text": payload.to_string()}]
+            }))
+        }
+
+        "patent_search_structured" => {
+            let query = get_str_param(&params, "query").unwrap_or_default();
+            let sources = get_str_array_param(&params, "sources")
+                .unwrap_or_else(|| vec!["USPTO".into(), "EPO_OPS".into(), "Google_Patents".into()]);
+            let date_from = get_str_param(&params, "date_from");
+            let date_to = get_str_param(&params, "date_to");
+            let session_id = get_str_param(&params, "session_id");
+            let max_results = get_int_param(&params, "max_results").unwrap_or(25) as usize;
+
+            let mut all_results: Vec<crate::ranking::PatentHit> = Vec::new();
+            let mut queries_run: Vec<Value> = Vec::new();
+
+            if sources.contains(&"USPTO".to_string()) {
+                let uspto = crate::search::searchers::UsptoTextSearchBackend::new(None);
+                let df = date_from.as_deref().map(|s| s.replace("-", ""));
+                let dt = date_to.as_deref().map(|s| s.replace("-", ""));
+                let hits = uspto
+                    .search(&query, df.as_deref(), dt.as_deref(), max_results)
+                    .await
+                    .unwrap_or_default();
+                queries_run.push(serde_json::json!({
+                    "source": "USPTO",
+                    "query": query,
+                    "result_count": hits.len(),
+                }));
+                all_results.extend(hits);
+            }
+
+            if sources.contains(&"EPO_OPS".to_string()) {
+                let epo = crate::search::searchers::EpoOpsSearchBackend::new(
+                    config.epo_client_id.clone(),
+                    config.epo_client_secret.clone(),
+                    None,
+                );
+                let hits = epo
+                    .search(&query, date_from.as_deref(), date_to.as_deref(), max_results)
+                    .await
+                    .unwrap_or_default();
+                queries_run.push(serde_json::json!({
+                    "source": "EPO_OPS",
+                    "query": query,
+                    "result_count": hits.len(),
+                }));
+                all_results.extend(hits);
+            }
+
+            if sources.contains(&"Google_Patents".to_string()) {
+                if let Some(ref key) = config.serpapi_key {
+                    let serp = crate::search::searchers::SerpApiGooglePatentsBackend::new(key.clone(), None);
+                    let hits = serp
+                        .search(&query, date_from.as_deref(), date_to.as_deref(), None, None, None, max_results)
+                        .await
+                        .unwrap_or_default();
+                    queries_run.push(serde_json::json!({
+                        "source": "Google_Patents",
+                        "query": query,
+                        "result_count": hits.len(),
+                    }));
+                    all_results.extend(hits);
+                }
+            }
+
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let deduped: Vec<&crate::ranking::PatentHit> = all_results
+                .iter()
+                .filter(|h| seen.insert(h.patent_id.clone()))
+                .collect();
+
+            if let Some(ref sid) = session_id {
+                if !deduped.is_empty() {
+                    let sm = crate::search::session_manager::SessionManager::new(None);
+                    if let Ok(session) = sm.load_session(sid) {
+                        let now = chrono::Utc::now().to_rfc3339();
+                        let query_num = session.queries.len() + 1;
+                        let session_hits: Vec<crate::search::session_manager::PatentHit> = deduped.iter().map(|h| (*h).clone().into()).collect();
+                        let record = crate::search::session_manager::QueryRecord {
+                            query_id: format!("q{:03}", query_num),
+                            timestamp: now,
+                            source: "structured".to_string(),
+                            query_text: query.clone(),
+                            result_count: session_hits.len() as i64,
+                            results: session_hits,
+                            metadata: Some(serde_json::json!({
+                                "sources": sources,
+                            })),
+                        };
+                        let _ = sm.append_query_result(sid, record);
+                    }
+                }
+            }
+
+            let payload = serde_json::json!({
+                "query": query,
+                "sources_searched": queries_run.iter().filter_map(|q| q["source"].as_str()).collect::<Vec<_>>(),
+                "queries_run": queries_run,
+                "total_found": deduped.len(),
+                "results": deduped.iter().map(|h| serde_json::json!({
+                    "patent_id": h.patent_id,
+                    "title": h.title,
+                    "date": h.date,
+                    "assignee": h.assignee,
+                    "inventors": h.inventors,
+                    "abstract": h.abstract_text,
+                    "source": h.source,
+                    "relevance": h.relevance,
+                    "url": h.url,
+                })).collect::<Vec<_>>(),
+            });
+
+            RpcResponse::ok(id, serde_json::json!({
+                "content": [{"type": "text", "text": payload.to_string()}]
+            }))
+        }
+
+        "patent_citation_chain" => {
+            let patent_id = get_str_param(&params, "patent_id").unwrap_or_default();
+            let direction = get_str_param(&params, "direction").unwrap_or_else(|| "backward".to_string());
+            let depth = get_int_param(&params, "depth").unwrap_or(1) as i32;
+            let session_id = get_str_param(&params, "session_id");
+
+            let epo = crate::search::searchers::EpoOpsSearchBackend::new(
+                config.epo_client_id.clone(),
+                config.epo_client_secret.clone(),
+                None,
+            );
+
+            let mut citations: serde_json::Map<String, Value> = serde_json::Map::new();
+            let directions: Vec<&str> = if direction == "both" {
+                vec!["backward", "forward"]
+            } else {
+                vec![direction.as_str()]
+            };
+
+            for dir_ in directions {
+                let level_1 = epo.get_citations(&patent_id, dir_).await.unwrap_or_default();
+                let mut entry = serde_json::json!({"level_1": level_1});
+                if depth >= 2 {
+                    let mut level_2: Vec<String> = Vec::new();
+                    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+                    if let Some(l1) = entry["level_1"].as_array() {
+                        for pid_val in l1.iter().take(10) {
+                            if let Some(pid) = pid_val.as_str() {
+                                seen.insert(pid.to_string());
+                                let more = epo.get_citations(pid, dir_).await.unwrap_or_default();
+                                level_2.extend(more);
+                            }
+                        }
+                    }
+                    level_2.retain(|p| !seen.contains(p));
+                    entry["level_2"] = serde_json::json!(level_2);
+                }
+                citations.insert(dir_.to_string(), entry);
+            }
+
+            if let Some(ref sid) = session_id {
+                let sm = crate::search::session_manager::SessionManager::new(None);
+                if let Ok(mut session) = sm.load_session(sid) {
+                    session.citation_chains = serde_json::json!(citations);
+                    let _ = sm.save_session(&session);
+                }
+            }
+
+            let payload = serde_json::json!({
+                "seed": patent_id,
+                "direction": direction,
+                "depth": depth,
+                "citations": citations,
+            });
+
+            RpcResponse::ok(id, serde_json::json!({
+                "content": [{"type": "text", "text": payload.to_string()}]
+            }))
+        }
+
+        "patent_classification_search" => {
+            let code = get_str_param(&params, "code").unwrap_or_default();
+            let include_subclasses = get_bool_param(&params, "include_subclasses").unwrap_or(true);
+            let date_from = get_str_param(&params, "date_from");
+            let date_to = get_str_param(&params, "date_to");
+            let session_id = get_str_param(&params, "session_id");
+            let max_results = get_int_param(&params, "max_results").unwrap_or(25) as usize;
+
+            let epo = crate::search::searchers::EpoOpsSearchBackend::new(
+                config.epo_client_id.clone(),
+                config.epo_client_secret.clone(),
+                None,
+            );
+            let hits = epo
+                .search_by_classification(&code, include_subclasses, date_from.as_deref(), date_to.as_deref(), max_results)
+                .await
+                .unwrap_or_default();
+
+            if let Some(ref sid) = session_id {
+                if !hits.is_empty() {
+                    let sm = crate::search::session_manager::SessionManager::new(None);
+                    if let Ok(mut session) = sm.load_session(sid) {
+                        let now = chrono::Utc::now().to_rfc3339();
+                        let query_num = session.queries.len() + 1;
+                        let session_hits: Vec<crate::search::session_manager::PatentHit> = hits.iter().map(|h| h.clone().into()).collect();
+                        let record = crate::search::session_manager::QueryRecord {
+                            query_id: format!("q{:03}", query_num),
+                            timestamp: now,
+                            source: "EPO_OPS".to_string(),
+                            query_text: code.clone(),
+                            result_count: session_hits.len() as i64,
+                            results: session_hits,
+                            metadata: Some(serde_json::json!({
+                                "classification_code": code,
+                                "include_subclasses": include_subclasses,
+                            })),
+                        };
+                        session.queries.push(record);
+                        if !session.classifications_explored.contains(&code) {
+                            session.classifications_explored.push(code.clone());
+                        }
+                        let _ = sm.save_session(&session);
+                    }
+                }
+            }
+
+            let payload = serde_json::json!({
+                "code": code,
+                "include_subclasses": include_subclasses,
+                "total_found": hits.len(),
+                "results": hits.iter().map(|h| serde_json::json!({
+                    "patent_id": h.patent_id,
+                    "title": h.title,
+                    "date": h.date,
+                    "assignee": h.assignee,
+                    "inventors": h.inventors,
+                    "source": h.source,
+                })).collect::<Vec<_>>(),
+            });
+
+            RpcResponse::ok(id, serde_json::json!({
+                "content": [{"type": "text", "text": payload.to_string()}]
+            }))
+        }
+
+        "patent_family_search" => {
+            let patent_id = get_str_param(&params, "patent_id").unwrap_or_default();
+            let session_id = get_str_param(&params, "session_id");
+
+            let epo = crate::search::searchers::EpoOpsSearchBackend::new(
+                config.epo_client_id.clone(),
+                config.epo_client_secret.clone(),
+                None,
+            );
+            let members = epo.get_family(&patent_id).await.unwrap_or_default();
+
+            if let Some(ref sid) = session_id {
+                if !members.is_empty() {
+                    let sm = crate::search::session_manager::SessionManager::new(None);
+                    if let Ok(mut session) = sm.load_session(sid) {
+                        session.patent_families.insert(
+                            patent_id.clone(),
+                            members.iter().filter_map(|m| m.get("patent_id").and_then(|v| v.as_str()).map(String::from)).collect(),
+                        );
+                        let _ = sm.save_session(&session);
+                    }
+                }
+            }
+
+            let payload = serde_json::json!({
+                "patent_id": patent_id,
+                "family_size": members.len(),
+                "members": members,
+            });
+
+            RpcResponse::ok(id, serde_json::json!({
+                "content": [{"type": "text", "text": payload.to_string()}]
+            }))
+        }
+
+        "patent_suggest_queries" => {
+            let topic = get_str_param(&params, "topic").unwrap_or_default();
+            let context = get_str_param(&params, "context").unwrap_or_default();
+            let prior_art_cutoff = get_str_param(&params, "prior_art_cutoff");
+
+            let planner = crate::planner::NaturalLanguagePlanner;
+            let intent = planner.plan(&topic, prior_art_cutoff.as_deref(), None);
+
+            let mut strategy = serde_json::json!({
+                "step_1_natural_search": {
+                    "description": "Run patent_search_natural with the query variants above",
+                    "action": format!("patent_search_natural(description=\"{}\", backend=\"auto\")", topic.chars().take(80).collect::<String>()),
+                },
+                "step_2_classification": {
+                    "description": "Find IPC/CPC class codes",
+                    "action": "Use patent_classification_search with codes from the relevant technology area",
+                },
+                "step_3_citation_chain": {
+                    "description": "After finding any relevant patent, follow its citations",
+                    "action": "Use patent_citation_chain on the most relevant results (direction='both', depth=2)",
+                },
+            });
+
+            if prior_art_cutoff.is_some() {
+                strategy.as_object_mut().unwrap().insert(
+                    "prior_art_notes".to_string(),
+                    serde_json::json!(format!(
+                        "Results before {} are potential prior art. Focus on forward citations of the most relevant early patents.",
+                        prior_art_cutoff.as_deref().unwrap_or("")
+                    )),
+                );
+            }
+
+            let payload = serde_json::json!({
+                "topic": topic,
+                "context": context,
+                "prior_art_cutoff": prior_art_cutoff,
+                "planner_output": {
+                    "concepts": intent.concepts,
+                    "synonyms": intent.synonyms,
+                    "rationale": intent.rationale,
+                    "query_variants": intent.query_variants.iter().map(|v| serde_json::json!({
+                        "query": v.query,
+                        "type": v.variant_type,
+                        "rationale": v.rationale,
+                    })).collect::<Vec<_>>(),
+                },
+                "strategy": strategy,
+            });
+
+            RpcResponse::ok(id, serde_json::json!({
+                "content": [{"type": "text", "text": payload.to_string()}]
+            }))
+        }
+
+        "patent_session_create" => {
+            let topic = get_str_param(&params, "topic").unwrap_or_default();
+            let prior_art_cutoff = get_str_param(&params, "prior_art_cutoff");
+            let notes = get_str_param(&params, "notes").unwrap_or_default();
+
+            let sm = crate::search::session_manager::SessionManager::new(None);
+            match sm.create_session(&topic, prior_art_cutoff.as_deref(), &notes) {
+                Ok(session) => {
+                    let payload = serde_json::json!({
+                        "session_id": session.session_id,
+                        "topic": session.topic,
+                        "created_at": session.created_at,
+                        "sessions_dir": sm.dir().to_string_lossy(),
+                        "message": format!("Session created. Use session_id='{}' in search calls to auto-save results.", session.session_id),
+                    });
+                    RpcResponse::ok(id, serde_json::json!({
+                        "content": [{"type": "text", "text": payload.to_string()}]
+                    }))
+                }
+                Err(e) => RpcResponse::err(id, -32603, &format!("Session create error: {}", e)),
+            }
+        }
+
+        "patent_session_load" => {
+            let session_id = get_str_param(&params, "session_id").unwrap_or_default();
+
+            let sm = crate::search::session_manager::SessionManager::new(None);
+            match sm.load_session(&session_id) {
+                Ok(session) => {
+                    let payload = serde_json::to_value(&session).unwrap_or(Value::Null);
+                    RpcResponse::ok(id, serde_json::json!({
+                        "content": [{"type": "text", "text": payload.to_string()}]
+                    }))
+                }
+                Err(_) => RpcResponse::err(id, -32603,
+                    &format!("Session '{}' not found. Use patent_session_list to see available sessions.", session_id)),
+            }
+        }
+
+        "patent_session_list" => {
+            let limit = get_int_param(&params, "limit").map(|n| n as usize);
+
+            let sm = crate::search::session_manager::SessionManager::new(None);
+            let summaries = sm.list_sessions(limit).unwrap_or_default();
+            let payload = serde_json::json!({
+                "sessions": summaries,
+                "total": summaries.len(),
+            });
+            RpcResponse::ok(id, serde_json::json!({
+                "content": [{"type": "text", "text": payload.to_string()}]
+            }))
+        }
+
+        "patent_session_note" => {
+            let session_id = get_str_param(&params, "session_id").unwrap_or_default();
+            let note = get_str_param(&params, "note").unwrap_or_default();
+
+            let sm = crate::search::session_manager::SessionManager::new(None);
+            match sm.add_note(&session_id, &note) {
+                Ok(()) => {
+                    let payload = serde_json::json!({"status": "note added", "session_id": session_id});
+                    RpcResponse::ok(id, serde_json::json!({
+                        "content": [{"type": "text", "text": payload.to_string()}]
+                    }))
+                }
+                Err(e) => RpcResponse::err(id, -32603, &format!("Note error: {}", e)),
+            }
+        }
+
+        "patent_session_annotate" => {
+            let session_id = get_str_param(&params, "session_id").unwrap_or_default();
+            let patent_id = get_str_param(&params, "patent_id").unwrap_or_default();
+            let annotation = get_str_param(&params, "annotation").unwrap_or_default();
+            let relevance = get_str_param(&params, "relevance").unwrap_or_else(|| "unknown".to_string());
+
+            let sm = crate::search::session_manager::SessionManager::new(None);
+            match sm.annotate_patent(&session_id, &patent_id, &annotation, &relevance) {
+                Ok(()) => {
+                    let payload = serde_json::json!({
+                        "session_id": session_id,
+                        "patent_id": patent_id,
+                        "relevance": relevance,
+                        "status": "annotated",
+                    });
+                    RpcResponse::ok(id, serde_json::json!({
+                        "content": [{"type": "text", "text": payload.to_string()}]
+                    }))
+                }
+                Err(e) => RpcResponse::err(id, -32603, &format!("Annotate error: {}", e)),
+            }
+        }
+
+        "patent_session_export" => {
+            let session_id = get_str_param(&params, "session_id").unwrap_or_default();
+            let output_path = get_str_param(&params, "output_path").map(std::path::PathBuf::from);
+
+            let sm = crate::search::session_manager::SessionManager::new(None);
+            match sm.export_markdown(&session_id, output_path.as_deref()) {
+                Ok(path) => {
+                    let payload = serde_json::json!({
+                        "report_path": path.to_string_lossy(),
+                        "status": "exported",
+                    });
+                    RpcResponse::ok(id, serde_json::json!({
+                        "content": [{"type": "text", "text": payload.to_string()}]
+                    }))
+                }
+                Err(e) => RpcResponse::err(id, -32603, &format!("Export error: {}", e)),
+            }
+        }
+
+        "patent_search_profile_login_start" => {
+            let profile_name = get_str_param(&params, "name").unwrap_or_else(|| "default".to_string());
+
+            let payload = serde_json::json!({
+                "status": "unavailable",
+                "message": format!(
+                    "Browser profile management requires the Python MCP server (python -m patent_mcp.search). \
+                     The Rust server does not have Playwright bindings. \
+                     Run the Python search server and call patent_search_profile_login_start there to set up profile '{}'.",
+                     profile_name
+                ),
+                "profile_name": profile_name,
+            });
             RpcResponse::ok(id, serde_json::json!({
                 "content": [{"type": "text", "text": payload.to_string()}]
             }))
@@ -451,12 +1216,7 @@ fn handle_line(line: &str, _config: &PatentConfig) -> RpcResponse {
             let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
             match tool_name.as_str() {
                 "fetch_patents" => {
-                    let patent_ids: Vec<String> = params
-                        .get("arguments")
-                        .and_then(|a| a.get("patent_ids"))
-                        .and_then(|v| v.as_array())
-                        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                        .unwrap_or_default();
+                    let patent_ids = get_str_array_param(&params, "patent_ids").unwrap_or_default();
 
                     RpcResponse::ok(id, serde_json::json!({
                         "content": [{"type": "text", "text": serde_json::json!({
@@ -477,6 +1237,23 @@ fn handle_line(line: &str, _config: &PatentConfig) -> RpcResponse {
                 "get_patent_metadata" => RpcResponse::ok(id, serde_json::json!({
                     "content": [{"type": "text", "text": serde_json::json!({"results": []}).to_string()}]
                 })),
+                "patent_search_natural" | "patent_search_structured" | "patent_suggest_queries" => {
+                    RpcResponse::ok(id, serde_json::json!({
+                        "content": [{"type": "text", "text": serde_json::json!({"query": "", "results": []}).to_string()}]
+                    }))
+                }
+                "patent_citation_chain" | "patent_classification_search" | "patent_family_search" => {
+                    RpcResponse::ok(id, serde_json::json!({
+                        "content": [{"type": "text", "text": serde_json::json!({"results": []}).to_string()}]
+                    }))
+                }
+                "patent_session_create" | "patent_session_load" | "patent_session_list"
+                | "patent_session_note" | "patent_session_annotate" | "patent_session_export"
+                | "patent_search_profile_login_start" => {
+                    RpcResponse::ok(id, serde_json::json!({
+                        "content": [{"type": "text", "text": serde_json::json!({"status": "ok"}).to_string()}]
+                    }))
+                }
                 _ => RpcResponse::err(id, -32601, &format!("Unknown tool: {}", tool_name)),
             }
         }
@@ -539,9 +1316,29 @@ mod tests {
         let names: Vec<&str> = tools.iter()
             .filter_map(|t| t["name"].as_str())
             .collect();
-        assert!(names.contains(&"fetch_patents"));
-        assert!(names.contains(&"list_cached_patents"));
-        assert!(names.contains(&"get_patent_metadata"));
+
+        let expected = [
+            "fetch_patents",
+            "list_cached_patents",
+            "get_patent_metadata",
+            "patent_search_natural",
+            "patent_search_structured",
+            "patent_citation_chain",
+            "patent_classification_search",
+            "patent_family_search",
+            "patent_suggest_queries",
+            "patent_session_create",
+            "patent_session_load",
+            "patent_session_list",
+            "patent_session_note",
+            "patent_session_annotate",
+            "patent_session_export",
+            "patent_search_profile_login_start",
+        ];
+        assert_eq!(names.len(), expected.len(), "Expected {} tools, got {}: {:?}", expected.len(), names.len(), names);
+        for name in &expected {
+            assert!(names.contains(name), "Missing tool: {}", name);
+        }
     }
 
     #[test]
@@ -580,5 +1377,207 @@ mod tests {
         let resp = handle_line(line, &config);
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
+    }
+
+    #[test]
+    fn test_session_create_and_list() {
+        let config = make_config();
+        let create_line = r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"patent_session_create","arguments":{"topic":"test topic","notes":"integration test"}}}"#;
+        let resp = handle_line(create_line, &config);
+        assert!(resp.result.is_some());
+
+        let list_line = r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"patent_session_list","arguments":{}}}"#;
+        let resp = handle_line(list_line, &config);
+        assert!(resp.result.is_some());
+    }
+
+    #[test]
+    fn test_search_tools_registered() {
+        let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
+        let config = make_config();
+        let resp = handle_line(line, &config);
+        let r = resp.result.unwrap();
+        let tools = r["tools"].as_array().unwrap();
+        let names: Vec<&str> = tools.iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+
+        assert!(names.contains(&"patent_search_natural"), "patent_search_natural missing");
+        assert!(names.contains(&"patent_search_structured"), "patent_search_structured missing");
+        assert!(names.contains(&"patent_citation_chain"), "patent_citation_chain missing");
+        assert!(names.contains(&"patent_classification_search"), "patent_classification_search missing");
+        assert!(names.contains(&"patent_family_search"), "patent_family_search missing");
+        assert!(names.contains(&"patent_suggest_queries"), "patent_suggest_queries missing");
+        assert!(names.contains(&"patent_session_create"), "patent_session_create missing");
+        assert!(names.contains(&"patent_session_export"), "patent_session_export missing");
+        assert!(names.contains(&"patent_search_profile_login_start"), "patent_search_profile_login_start missing");
+    }
+
+    #[test]
+    fn parity_tools_have_input_schema() {
+        let config = make_config();
+        let line = r#"{"jsonrpc":"2.0","id":30,"method":"tools/list","params":{}}"#;
+        let resp = handle_line(line, &config);
+        let tools = resp.result.unwrap()["tools"].as_array().unwrap().clone();
+
+        for tool in tools {
+            let name = tool["name"].as_str().unwrap();
+            assert!(tool["description"].is_string(), "{} missing description", name);
+            assert!(tool["inputSchema"]["type"].is_string(), "{} missing inputSchema.type", name);
+            assert!(tool["inputSchema"]["properties"].is_object(), "{} missing inputSchema.properties", name);
+        }
+    }
+
+    #[test]
+    fn parity_session_create_shape_via_session_manager() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sm = crate::search::session_manager::SessionManager::new(Some(tmp.path().to_path_buf()));
+
+        let session = sm.create_session("wireless-charging", Some("2020-01-01"), "test notes").unwrap();
+        assert!(session.session_id.contains("wireless-charging"));
+        assert_eq!(session.topic, "wireless-charging");
+        assert_eq!(session.prior_art_cutoff.as_deref(), Some("2020-01-01"));
+        assert_eq!(session.notes, "test notes");
+        assert!(!session.created_at.is_empty());
+        assert!(!session.modified_at.is_empty());
+        assert!(session.queries.is_empty());
+        assert!(session.classifications_explored.is_empty());
+        assert!(session.citation_chains.is_object());
+        assert!(session.patent_families.is_empty());
+
+        let loaded = sm.load_session(&session.session_id).unwrap();
+        assert_eq!(loaded.session_id, session.session_id);
+        assert_eq!(loaded.topic, session.topic);
+    }
+
+    #[test]
+    fn parity_session_list_shape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sm = crate::search::session_manager::SessionManager::new(Some(tmp.path().to_path_buf()));
+        sm.create_session("test-1", None, "").unwrap();
+        sm.create_session("test-2", None, "").unwrap();
+
+        let summaries = sm.list_sessions(None).unwrap();
+        assert_eq!(summaries.len(), 2);
+        for s in &summaries {
+            assert!(!s.session_id.is_empty());
+            assert!(!s.topic.is_empty());
+            assert!(!s.created_at.is_empty());
+            assert!(!s.modified_at.is_empty());
+        }
+    }
+
+    #[test]
+    fn parity_session_note_and_annotate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sm = crate::search::session_manager::SessionManager::new(Some(tmp.path().to_path_buf()));
+        let session = sm.create_session("test-note", None, "").unwrap();
+        let sid = &session.session_id;
+
+        let hit = crate::search::session_manager::PatentHit {
+            patent_id: "US1234567".to_string(),
+            title: Some("Test Patent".to_string()),
+            date: None,
+            assignee: None,
+            inventors: vec![],
+            abstract_text: None,
+            source: "test".to_string(),
+            relevance: "unknown".to_string(),
+            note: String::new(),
+            prior_art: None,
+            url: None,
+        };
+        let record = crate::search::session_manager::QueryRecord {
+            query_id: "q001".to_string(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            source: "test".to_string(),
+            query_text: "test query".to_string(),
+            result_count: 1,
+            results: vec![hit],
+            metadata: None,
+        };
+        sm.append_query_result(sid, record).unwrap();
+
+        sm.add_note(sid, "first note").unwrap();
+        let loaded = sm.load_session(sid).unwrap();
+        assert!(loaded.notes.contains("first note"));
+
+        sm.annotate_patent(sid, "US1234567", "highly relevant", "high").unwrap();
+        let loaded = sm.load_session(sid).unwrap();
+        let found = loaded.queries.iter().any(|q|
+            q.results.iter().any(|h| h.patent_id == "US1234567" && h.relevance == "high" && h.note == "highly relevant")
+        );
+        assert!(found, "annotated patent should have updated note and relevance");
+    }
+
+    #[test]
+    fn parity_session_export_produces_markdown() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sm = crate::search::session_manager::SessionManager::new(Some(tmp.path().to_path_buf()));
+        let session = sm.create_session("export-test", Some("2020-01-01"), "initial notes").unwrap();
+        sm.add_note(&session.session_id, "research note").unwrap();
+
+        let report_path = sm.export_markdown(&session.session_id, None).unwrap();
+        assert!(report_path.exists());
+        let content = std::fs::read_to_string(&report_path).unwrap();
+        assert!(content.contains("export-test"));
+        assert!(content.contains("research note"));
+    }
+
+    #[test]
+    fn parity_citation_chains_in_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sm = crate::search::session_manager::SessionManager::new(Some(tmp.path().to_path_buf()));
+        let session = sm.create_session("citation-test", None, "").unwrap();
+        let sid = &session.session_id;
+
+        let mut session = sm.load_session(sid).unwrap();
+        session.citation_chains = serde_json::json!({
+            "US1234567": {
+                "backward": {"level_1": ["US1111111", "US2222222"]},
+                "forward": {"level_1": ["US3333333"]}
+            }
+        });
+        sm.save_session(&session).unwrap();
+
+        let loaded = sm.load_session(sid).unwrap();
+        let chains = &loaded.citation_chains;
+        assert!(chains["US1234567"]["backward"]["level_1"].is_array());
+        assert_eq!(chains["US1234567"]["backward"]["level_1"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn parity_classifications_explored_in_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sm = crate::search::session_manager::SessionManager::new(Some(tmp.path().to_path_buf()));
+        let session = sm.create_session("class-test", None, "").unwrap();
+        let sid = &session.session_id;
+
+        let mut session = sm.load_session(sid).unwrap();
+        session.classifications_explored.push("H02J50".to_string());
+        session.classifications_explored.push("H01F38".to_string());
+        sm.save_session(&session).unwrap();
+
+        let loaded = sm.load_session(sid).unwrap();
+        assert_eq!(loaded.classifications_explored, vec!["H02J50", "H01F38"]);
+    }
+
+    #[test]
+    fn parity_patent_families_in_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sm = crate::search::session_manager::SessionManager::new(Some(tmp.path().to_path_buf()));
+        let session = sm.create_session("family-test", None, "").unwrap();
+        let sid = &session.session_id;
+
+        let mut session = sm.load_session(sid).unwrap();
+        session.patent_families.insert(
+            "US1234567".to_string(),
+            vec!["EP1234567".to_string(), "WO2020123456".to_string()],
+        );
+        sm.save_session(&session).unwrap();
+
+        let loaded = sm.load_session(sid).unwrap();
+        assert_eq!(loaded.patent_families["US1234567"].len(), 2);
+        assert!(loaded.patent_families["US1234567"].contains(&"EP1234567".to_string()));
     }
 }

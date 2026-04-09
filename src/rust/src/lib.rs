@@ -11,4 +11,5 @@ pub mod id_canon;
 pub mod journal;
 pub mod planner;
 pub mod ranking;
+pub mod search;
 pub mod server;
