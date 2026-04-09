@@ -43,7 +43,9 @@ struct LockGuard<'a> {
 
 impl<'a> Drop for LockGuard<'a> {
     fn drop(&mut self) {
-        let _ = self.pm.release_lock(self.name);
+        if let Err(e) = self.pm.release_lock(self.name) {
+            warn!("Failed to release lock for {}: {}", self.name, e);
+        }
     }
 }
 

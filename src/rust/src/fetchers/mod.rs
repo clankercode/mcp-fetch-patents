@@ -8,9 +8,11 @@ pub mod http;
 pub mod web_search;
 
 use std::collections::HashMap;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use tracing::warn;
 
 use async_trait::async_trait;
 use reqwest::Client;
@@ -282,11 +284,20 @@ impl FetcherOrchestrator {
         let mut all_txts: Vec<PathBuf> = Vec::new();
         let mut best_metadata: Option<PatentMetadata> = None;
 
-        // Collect from all structured sources so later sources can fill metadata gaps.
-        for source in &sources {
-            let source_name = source.source_name().to_string();
-            debug!("Trying source {} for {}", source_name, patent.canonical);
-            let result = source.fetch(patent, output_dir, &self.config).await;
+        let fetch_futures: Vec<_> = sources
+            .iter()
+            .map(|source| {
+                let source_name = source.source_name().to_string();
+                async move {
+                    debug!("Trying source {} for {}", source_name, patent.canonical);
+                    let result = source.fetch(patent, output_dir, &self.config).await;
+                    (source_name, result)
+                }
+            })
+            .collect();
+        let fetch_results = futures::future::join_all(fetch_futures).await;
+
+        for (_source_name, result) in fetch_results {
             all_attempts.push(result.source_attempt.clone());
             if result.source_attempt.success {
                 if let Some(p) = result.pdf_path {
@@ -362,9 +373,12 @@ impl FetcherOrchestrator {
                     md: md_path.clone(),
                     images: vec![],
                 };
-                let _ = self
-                    .cache
-                    .store(&patent.canonical, &artifacts, meta, Some(&all_attempts));
+                if let Err(e) =
+                    self.cache
+                        .store(&patent.canonical, &artifacts, meta, Some(&all_attempts))
+                {
+                    warn!("Cache store failed for {}: {}", patent.canonical, e);
+                }
             }
         }
 

@@ -6,6 +6,10 @@
 //! Mirrors `patent_mcp.search.ranking` (Python) exactly.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
+
+static REGEX_CACHE: LazyLock<std::sync::Mutex<HashMap<String, Option<regex::Regex>>>> =
+    LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -171,19 +175,40 @@ struct CompiledConcept {
 }
 
 fn compile_concepts(concepts: &[String]) -> Vec<CompiledConcept> {
-    concepts
-        .iter()
-        .map(|c| {
+    let mut need_compile: Vec<(usize, String, String)> = Vec::new();
+    let mut results: Vec<(usize, Option<regex::Regex>)> = Vec::new();
+
+    {
+        let cache = REGEX_CACHE.lock().unwrap();
+        for (i, c) in concepts.iter().enumerate() {
             let lower = c.to_lowercase();
             if lower.contains(' ') {
-                CompiledConcept { lower, regex: None }
+                results.push((i, None));
+            } else if let Some(cached) = cache.get(&lower) {
+                results.push((i, cached.clone()));
             } else {
                 let pattern = format!(r"\b{}\b", regex::escape(&lower));
-                CompiledConcept {
-                    lower,
-                    regex: regex::Regex::new(&pattern).ok(),
-                }
+                need_compile.push((i, lower, pattern));
             }
+        }
+    }
+
+    for (i, lower, pattern) in &need_compile {
+        let compiled = regex::Regex::new(pattern).ok();
+        results.push((*i, compiled.clone()));
+        let mut cache = REGEX_CACHE.lock().unwrap();
+        cache.insert(lower.clone(), compiled);
+    }
+
+    results.sort_by_key(|(i, _)| *i);
+
+    concepts
+        .iter()
+        .enumerate()
+        .zip(results.iter())
+        .map(|((_, c), (_, regex))| CompiledConcept {
+            lower: c.to_lowercase(),
+            regex: regex.clone(),
         })
         .collect()
 }

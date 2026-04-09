@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::warn;
 
 pub use crate::ranking::PatentHit;
 
@@ -308,8 +309,11 @@ impl SessionManager {
                         if idx.sessions.len() < before {
                             let content = serde_json::to_string_pretty(&idx)?;
                             let tmp_path = dir.join(".index.json.tmp");
-                            let _ = fs::write(&tmp_path, &content);
-                            let _ = fs::rename(&tmp_path, &index_path);
+                            if let Err(e) = fs::write(&tmp_path, &content) {
+                                warn!("Failed to write index tmp file: {}", e);
+                            } else if let Err(e) = fs::rename(&tmp_path, &index_path) {
+                                warn!("Failed to rename index file: {}", e);
+                            }
                         }
                     }
                 }
