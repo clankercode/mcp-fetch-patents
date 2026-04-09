@@ -274,13 +274,16 @@ impl FetcherOrchestrator {
 
         // Convert PDF to markdown if we got a PDF
         let mut md_path: Option<PathBuf> = None;
-        if let Some(pdf) = all_pdfs.first() {
+        if let Some(pdf) = all_pdfs.first().cloned() {
             let pipeline = ConverterPipeline::new(
                 self.config.converters_order.clone(),
                 self.config.converters_disabled.clone(),
             );
             let md_out = output_dir.join(format!("{}.md", patent.canonical));
-            if let Ok(cr) = pipeline.pdf_to_markdown(pdf, &md_out) {
+            let result = tokio::task::spawn_blocking(move || {
+                pipeline.pdf_to_markdown(&pdf, &md_out)
+            }).await;
+            if let Ok(Ok(cr)) = result {
                 if cr.success {
                     md_path = cr.output_path;
                 }

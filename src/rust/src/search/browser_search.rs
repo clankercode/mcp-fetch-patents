@@ -34,6 +34,17 @@ pub struct GooglePatentsBrowserSearch {
     debug_html_dir: Option<PathBuf>,
 }
 
+struct LockGuard<'a> {
+    pm: &'a ProfileManager,
+    name: &'a str,
+}
+
+impl<'a> Drop for LockGuard<'a> {
+    fn drop(&mut self) {
+        let _ = self.pm.release_lock(self.name);
+    }
+}
+
 impl GooglePatentsBrowserSearch {
     pub fn new(
         profiles_dir: Option<PathBuf>,
@@ -66,11 +77,9 @@ impl GooglePatentsBrowserSearch {
             return Ok(vec![]);
         }
 
-        let result = self.run_search(query, date_before, date_after, max_results).await;
+        let _lock_guard = LockGuard { pm: &self.profile_manager, name: &self.profile_name };
 
-        let _ = self.profile_manager.release_lock(&self.profile_name);
-
-        result
+        self.run_search(query, date_before, date_after, max_results).await
     }
 
     async fn run_search(

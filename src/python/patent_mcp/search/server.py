@@ -28,6 +28,7 @@ mcp = FastMCP("patent-search")
 # ---------------------------------------------------------------------------
 
 _session_manager = None
+_orchestrator = None
 
 
 def _get_session_manager():
@@ -37,6 +38,15 @@ def _get_session_manager():
 
         _session_manager = SessionManager()
     return _session_manager
+
+
+def _get_orchestrator():
+    global _orchestrator
+    if _orchestrator is None:
+        from patent_mcp.fetchers.orchestrator import FetcherOrchestrator
+
+        _orchestrator = FetcherOrchestrator(_get_config())
+    return _orchestrator
 
 
 def _get_config():
@@ -982,11 +992,9 @@ def _enrich_hits(scored_hits: list) -> list[str]:
     enriched_ids: list[str] = []
     try:
         from patent_mcp.id_canon import canonicalize
-        from patent_mcp.config import load_config
-        from patent_mcp.fetchers.orchestrator import FetcherOrchestrator
 
-        cfg = load_config()
-        orchestrator = FetcherOrchestrator(cfg)
+        cfg = _get_config()
+        orchestrator = _get_orchestrator()
 
         patent_ids = []
         for sh in scored_hits:

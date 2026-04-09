@@ -293,7 +293,7 @@ impl SessionManager {
         patent_id: &str,
         annotation: &str,
         relevance: &str,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let mut session = self.load_session(session_id).await?;
         let mut updated = false;
         for query in &mut session.queries {
@@ -308,7 +308,7 @@ impl SessionManager {
         if updated {
             self.save_session(&mut session).await?;
         }
-        Ok(())
+        Ok(updated)
     }
 
     pub async fn export_markdown(

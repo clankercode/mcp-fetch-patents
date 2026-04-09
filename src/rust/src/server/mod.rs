@@ -160,16 +160,16 @@ fn tools_list() -> Value {
                         "session_id": {"type": "string", "description": "Optional session ID to save results."},
                         "max_results": {"type": "integer", "default": 25, "description": "Maximum results after ranking."},
                         "backend": {"type": "string", "default": "auto", "description": "Search backend: \"browser\", \"serpapi\", or \"auto\"."},
-                        "enrich_top_n": {"type": "integer", "description": "Enrich top N results with full metadata via fetch pipeline. Default from config."},
+                        "enrich_top_n": {"type": "integer", "description": "Enrich top N results with full metadata. Default: 5. Set to 0 to disable."},
                         "profile_name": {"type": "string", "description": "Browser profile to use for browser-backed search."},
-                        "debug": {"type": "boolean", "default": false}
+                        "debug": {"type": "boolean", "default": false, "description": "If true, save debug HTML snapshots of search result pages."}
                     },
                     "required": ["description"]
                 }
             },
             {
                 "name": "patent_search_structured",
-                "description": "Run an expert-syntax Boolean patent query against one or more sources (USPTO, EPO OPS, Google Patents).",
+                "description": "Run an expert-syntax Boolean patent query against one or more sources (USPTO, EPO OPS, Google Patents). Examples: USPTO: TTL/(wireless ADJ charging) AND CPC/H02J50, EPO: ti=\"wireless charging\" AND ic=\"H02J50/*\"",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -177,8 +177,8 @@ fn tools_list() -> Value {
                         "sources": {"type": "array", "items": {"type": "string"}, "description": "Sources to query. Options: \"USPTO\", \"EPO_OPS\", \"Google_Patents\"."},
                         "date_from": {"type": "string", "description": "Start date filter (YYYY-MM-DD)."},
                         "date_to": {"type": "string", "description": "End date filter (YYYY-MM-DD)."},
-                        "session_id": {"type": "string"},
-                        "max_results": {"type": "integer", "default": 25}
+                        "session_id": {"type": "string", "description": "Optional session ID to automatically save results."},
+                        "max_results": {"type": "integer", "default": 25, "description": "Maximum results per source (default 25)."}
                     },
                     "required": ["query"]
                 }
@@ -192,7 +192,7 @@ fn tools_list() -> Value {
                         "patent_id": {"type": "string", "description": "Seed patent ID."},
                         "direction": {"type": "string", "default": "backward", "description": "\"backward\", \"forward\", or \"both\"."},
                         "depth": {"type": "integer", "default": 1, "description": "Citation depth (1-2). Depth 2 follows citations of citations."},
-                        "session_id": {"type": "string"}
+                        "session_id": {"type": "string", "description": "Optional session ID to save the citation tree."}
                     },
                     "required": ["patent_id"]
                 }
@@ -204,11 +204,11 @@ fn tools_list() -> Value {
                     "type": "object",
                     "properties": {
                         "code": {"type": "string", "description": "IPC/CPC classification code (e.g. \"H02J50\")."},
-                        "include_subclasses": {"type": "boolean", "default": true},
-                        "date_from": {"type": "string"},
-                        "date_to": {"type": "string"},
-                        "session_id": {"type": "string"},
-                        "max_results": {"type": "integer", "default": 25}
+                        "include_subclasses": {"type": "boolean", "default": true, "description": "If true, includes all sub-codes under this code (e.g. H02J50 includes H02J50/10, H02J50/20, etc.)."},
+                        "date_from": {"type": "string", "description": "Start date filter (YYYY-MM-DD)."},
+                        "date_to": {"type": "string", "description": "End date filter (YYYY-MM-DD)."},
+                        "session_id": {"type": "string", "description": "Optional session ID to save results."},
+                        "max_results": {"type": "integer", "default": 25, "description": "Maximum results to return (default 25)."}
                     },
                     "required": ["code"]
                 }
@@ -219,15 +219,15 @@ fn tools_list() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "patent_id": {"type": "string"},
-                        "session_id": {"type": "string"}
+                        "patent_id": {"type": "string", "description": "The patent ID to find family members for (e.g. \"US10123456B2\")."},
+                        "session_id": {"type": "string", "description": "Optional session ID to save the family data."}
                     },
                     "required": ["patent_id"]
                 }
             },
             {
                 "name": "patent_suggest_queries",
-                "description": "Generate search strategy suggestions for a patent research topic without running them.",
+                "description": "Generate search strategy suggestions for a patent research topic without running them. Returns a multi-step strategy guide: NL query variants from the planner, classification codes to explore, citation chain directions, and a prior-art date reminder if a cutoff is provided.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -240,13 +240,13 @@ fn tools_list() -> Value {
             },
             {
                 "name": "patent_session_create",
-                "description": "Create a new patent research session.",
+                "description": "Create a new patent research session. Sessions persist across tool calls and accumulate search results, annotations, citation chains, and researcher notes. Pass the returned session_id to search tools to auto-save results.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "topic": {"type": "string"},
-                        "prior_art_cutoff": {"type": "string"},
-                        "notes": {"type": "string", "default": ""}
+                        "topic": {"type": "string", "description": "Brief description of the research topic (used for session naming)."},
+                        "prior_art_cutoff": {"type": "string", "description": "ISO date (YYYY-MM-DD) — if set, the strategy guide highlights patents before this date as prior art."},
+                        "notes": {"type": "string", "default": "", "description": "Optional initial notes for the session."}
                     },
                     "required": ["topic"]
                 }
@@ -257,7 +257,7 @@ fn tools_list() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string"}
+                        "session_id": {"type": "string", "description": "The session ID to load (from patent_session_list or a prior session_create call)."}
                     },
                     "required": ["session_id"]
                 }
@@ -278,8 +278,8 @@ fn tools_list() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string"},
-                        "note": {"type": "string"}
+                        "session_id": {"type": "string", "description": "The session to update."},
+                        "note": {"type": "string", "description": "Text note to append (e.g. observations, next steps, hypotheses)."}
                     },
                     "required": ["session_id", "note"]
                 }
@@ -290,9 +290,9 @@ fn tools_list() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string"},
-                        "patent_id": {"type": "string"},
-                        "annotation": {"type": "string"},
+                        "session_id": {"type": "string", "description": "The session containing the patent."},
+                        "patent_id": {"type": "string", "description": "The patent ID to annotate (e.g. \"US10123456B2\")."},
+                        "annotation": {"type": "string", "description": "Researcher note about why this patent is relevant/irrelevant."},
                         "relevance": {"type": "string", "description": "\"high\", \"medium\", \"low\", or \"unknown\""}
                     },
                     "required": ["session_id", "patent_id", "annotation", "relevance"]
@@ -304,8 +304,8 @@ fn tools_list() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "session_id": {"type": "string"},
-                        "output_path": {"type": "string", "description": "Custom output path."}
+                        "session_id": {"type": "string", "description": "The session to export."},
+                        "output_path": {"type": "string", "description": "Custom output path. Defaults to .patent-sessions/{session_id}-report.md"}
                     },
                     "required": ["session_id"]
                 }
@@ -732,13 +732,17 @@ async fn execute_tool_call(
                (effective_backend == "auto") ||
                (original_backend == "auto" && hits_by_query.is_empty()) {
                 if let Some(ref serp) = backends.serpapi {
-                    for variant in &intent.query_variants {
-                        if hits_by_query.contains_key(&variant.query) {
-                            continue;
-                        }
-                        let hits = serp.search(
+                    let serp_variants: Vec<_> = intent.query_variants.iter()
+                        .filter(|v| !hits_by_query.contains_key(&v.query))
+                        .collect();
+                    let serp_futures: Vec<_> = serp_variants.iter()
+                        .map(|variant| serp.search(
                             &variant.query, None, date_cutoff.as_deref(), None, None, None, max_results,
-                        ).await.unwrap_or_else(|e| { warn!("SerpAPI search failed: {}", e); vec![] });
+                        ))
+                        .collect();
+                    let serp_results = futures::future::join_all(serp_futures).await;
+                    for (variant, result) in serp_variants.iter().zip(serp_results) {
+                        let hits = result.unwrap_or_else(|e| { warn!("SerpAPI search failed: {}", e); vec![] });
                         let count = hits.len();
                         queries_run.push(serde_json::json!({
                             "source": "Google_Patents_SerpAPI",
@@ -948,31 +952,48 @@ async fn execute_tool_call(
             let epo = &backends.epo;
 
             let mut citations: serde_json::Map<String, Value> = serde_json::Map::new();
-            let directions: Vec<&str> = if direction == "both" {
-                vec!["backward", "forward"]
-            } else {
-                vec![direction.as_str()]
-            };
 
-            for dir_ in directions {
-                let level_1 = epo.get_citations(&patent_id, dir_).await.unwrap_or_else(|e| { warn!("EPO OPS get_citations failed for {}: {}", patent_id, e); vec![] });
-                let mut entry = serde_json::json!({"level_1": level_1});
+            if direction == "both" {
+                let (bw_result, fw_result) = tokio::join!(
+                    epo.get_citations(&patent_id, "backward"),
+                    epo.get_citations(&patent_id, "forward")
+                );
+                let bw_l1 = bw_result.unwrap_or_else(|e| { warn!("EPO OPS get_citations failed for {}: {}", patent_id, e); vec![] });
+                let fw_l1 = fw_result.unwrap_or_else(|e| { warn!("EPO OPS get_citations failed for {}: {}", patent_id, e); vec![] });
+
+                let mut bw_entry = serde_json::json!({"level_1": &bw_l1});
                 if depth >= 2 {
-                    let mut level_2: Vec<String> = Vec::new();
-                    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-                    if let Some(l1) = entry["level_1"].as_array() {
-                        for pid_val in l1.iter().take(10) {
-                            if let Some(pid) = pid_val.as_str() {
-                                seen.insert(pid.to_string());
-                                let more = epo.get_citations(pid, dir_).await.unwrap_or_else(|e| { warn!("EPO OPS get_citations failed for {}: {}", pid, e); vec![] });
-                                level_2.extend(more);
-                            }
-                        }
-                    }
-                    level_2.retain(|p| !seen.contains(p));
-                    entry["level_2"] = serde_json::json!(level_2);
+                    let seen: std::collections::HashSet<String> = bw_l1.iter().take(10).cloned().collect();
+                    let l2_futs: Vec<_> = bw_l1.iter().take(10).map(|p| epo.get_citations(p, "backward")).collect();
+                    let l2_res = futures::future::join_all(l2_futs).await;
+                    let mut l2: Vec<String> = l2_res.into_iter().flat_map(|r| r.unwrap_or_else(|e| { warn!("EPO OPS get_citations failed: {}", e); vec![] })).collect();
+                    l2.retain(|p| !seen.contains(p));
+                    bw_entry["level_2"] = serde_json::json!(l2);
                 }
-                citations.insert(dir_.to_string(), entry);
+                citations.insert("backward".to_string(), bw_entry);
+
+                let mut fw_entry = serde_json::json!({"level_1": &fw_l1});
+                if depth >= 2 {
+                    let seen: std::collections::HashSet<String> = fw_l1.iter().take(10).cloned().collect();
+                    let l2_futs: Vec<_> = fw_l1.iter().take(10).map(|p| epo.get_citations(p, "forward")).collect();
+                    let l2_res = futures::future::join_all(l2_futs).await;
+                    let mut l2: Vec<String> = l2_res.into_iter().flat_map(|r| r.unwrap_or_else(|e| { warn!("EPO OPS get_citations failed: {}", e); vec![] })).collect();
+                    l2.retain(|p| !seen.contains(p));
+                    fw_entry["level_2"] = serde_json::json!(l2);
+                }
+                citations.insert("forward".to_string(), fw_entry);
+            } else {
+                let l1 = epo.get_citations(&patent_id, &direction).await.unwrap_or_else(|e| { warn!("EPO OPS get_citations failed for {}: {}", patent_id, e); vec![] });
+                let mut entry = serde_json::json!({"level_1": &l1});
+                if depth >= 2 {
+                    let seen: std::collections::HashSet<String> = l1.iter().take(10).cloned().collect();
+                    let l2_futs: Vec<_> = l1.iter().take(10).map(|p| epo.get_citations(p, &direction)).collect();
+                    let l2_res = futures::future::join_all(l2_futs).await;
+                    let mut l2: Vec<String> = l2_res.into_iter().flat_map(|r| r.unwrap_or_else(|e| { warn!("EPO OPS get_citations failed: {}", e); vec![] })).collect();
+                    l2.retain(|p| !seen.contains(p));
+                    entry["level_2"] = serde_json::json!(l2);
+                }
+                citations.insert(direction.clone(), entry);
             }
 
             let citations_snapshot = citations.clone();
@@ -1231,12 +1252,24 @@ async fn execute_tool_call(
 
             let sm = &backends.session_manager;
             match sm.annotate_patent(&session_id, &patent_id, &annotation, &relevance).await {
-                Ok(()) => {
+                Ok(true) => {
                     let payload = serde_json::json!({
                         "session_id": session_id,
                         "patent_id": patent_id,
                         "relevance": relevance,
                         "status": "annotated",
+                    });
+                    RpcResponse::ok(id, serde_json::json!({
+                        "content": [{"type": "text", "text": payload.to_string()}],
+                        "isError": false
+                    }))
+                }
+                Ok(false) => {
+                    let payload = serde_json::json!({
+                        "status": "warning",
+                        "message": format!("Patent {} not found in session {}", patent_id, session_id),
+                        "patent_id": patent_id,
+                        "session_id": session_id,
                     });
                     RpcResponse::ok(id, serde_json::json!({
                         "content": [{"type": "text", "text": payload.to_string()}],
@@ -1384,13 +1417,13 @@ pub async fn run_server(config: PatentConfig) -> Result<()> {
         },
     };
 
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(64);
     std::thread::spawn(move || {
         use std::io::BufRead;
         let stdin = std::io::stdin();
         for line in stdin.lock().lines() {
             match line {
-                Ok(l) => { let _ = tx.send(l); }
+                Ok(l) => { let _ = tx.blocking_send(l); }
                 Err(_) => break,
             }
         }

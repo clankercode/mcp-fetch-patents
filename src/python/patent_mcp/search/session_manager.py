@@ -218,10 +218,18 @@ class SessionManager:
         self.save_session(session)
         return session
 
-    def load_session(self, session_id: str) -> Session:
-        """Load a session by ID. Raises FileNotFoundError if not found."""
+    def _resolve_and_check(self, session_id: str) -> Path:
         _validate_session_id(session_id)
         path = self._dir / f"{session_id}.json"
+        resolved_path = path.resolve()
+        resolved_dir = self._dir.resolve()
+        if not str(resolved_path).startswith(str(resolved_dir)):
+            raise ValueError(f"Session path escapes directory: {session_id}")
+        return path
+
+    def load_session(self, session_id: str) -> Session:
+        """Load a session by ID. Raises FileNotFoundError if not found."""
+        path = self._resolve_and_check(session_id)
         if not path.exists():
             raise FileNotFoundError(f"Session not found: {session_id}")
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -230,7 +238,7 @@ class SessionManager:
     def save_session(self, session: Session) -> None:
         """Atomically write session to disk and update the index."""
         session.modified_at = now_iso()
-        path = self._dir / f"{session.session_id}.json"
+        path = self._resolve_and_check(session.session_id)
         tmp_path = path.with_suffix(".json.tmp")
         content = json.dumps(_session_to_dict(session), indent=2, ensure_ascii=False)
         tmp_path.write_text(content, encoding="utf-8")
@@ -340,7 +348,9 @@ class SessionManager:
         session = self.load_session(session_id)
 
         if output_path is None:
-            output_path = self._dir / f"{session_id}-report.md"
+            output_path = self._resolve_and_check(session_id).with_name(
+                f"{session_id}-report.md"
+            )
 
         lines: list[str] = []
 
