@@ -11,6 +11,7 @@ import os
 import re
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -244,6 +245,13 @@ class SessionManager:
         tmp_path.write_text(content, encoding="utf-8")
         tmp_path.rename(path)
         self._update_index(session)
+
+    @contextmanager
+    def update_session(self, session_id: str):
+        """Load a session, yield it for modification, then auto-save."""
+        session = self.load_session(session_id)
+        yield session
+        self.save_session(session)
 
     def list_sessions(self, limit: int | None = None) -> list[SessionSummary]:
         """Return sessions sorted by modified_at descending.

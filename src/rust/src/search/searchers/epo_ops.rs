@@ -1,315 +1,13 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, Result};
 use reqwest::Client;
 use tracing::warn;
 
 use crate::cache::SessionCache;
 use crate::ranking::PatentHit;
 
-fn validate_path_segment(input: &str, label: &str) -> Result<()> {
-    if input.contains('/')
-        || input.contains('\\')
-        || input.contains("..")
-        || input.contains('?')
-        || input.contains('#')
-        || input.chars().any(|c| c.is_whitespace())
-    {
-        return Err(anyhow!(
-            "Invalid {} '{}' contains forbidden characters",
-            label,
-            input
-        ));
-    }
-    Ok(())
-}
-
-pub struct SerpApiGooglePatentsBackend {
-    api_key: String,
-    base_url: String,
-    client: Client,
-}
-
-impl SerpApiGooglePatentsBackend {
-    pub fn new(api_key: String, base_url: Option<String>, timeout: Duration, client: Option<Client>) -> Self {
-        Self {
-            api_key,
-            base_url: base_url.unwrap_or_else(|| "https://serpapi.com/search".to_string()),
-            client: client.unwrap_or_else(|| {
-                Client::builder()
-                    .timeout(timeout)
-                    .build()
-                    .unwrap_or_else(|_| Client::new())
-            }),
-        }
-    }
-
-    #[tracing::instrument(skip_all)]
-    #[allow(clippy::too_many_arguments)]
-    pub async fn search(
-        &self,
-        query: &str,
-        date_from: Option<&str>,
-        date_to: Option<&str>,
-        assignee: Option<&str>,
-        inventor: Option<&str>,
-        patent_type: Option<&str>,
-        max_results: usize,
-    ) -> Result<Vec<PatentHit>> {
-        let mut params = vec![
-            ("engine", "google_patents".to_string()),
-            ("q", query.to_string()),
-            ("api_key", self.api_key.clone()),
-            ("num", max_results.to_string()),
-        ];
-
-        if let Some(df) = date_from {
-            params.push(("after_priority_date", df.replace('-', "/")));
-        }
-        if let Some(dt) = date_to {
-            params.push(("before_priority_date", dt.replace('-', "/")));
-        }
-        if let Some(a) = assignee {
-            params.push(("assignee", a.to_string()));
-        }
-        if let Some(inv) = inventor {
-            params.push(("inventor", inv.to_string()));
-        }
-        if let Some(pt) = patent_type {
-            params.push(("type", pt.to_string()));
-        }
-
-        let resp = match self.client.get(&self.base_url).query(&params).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("SerpAPI Google Patents request failed: {}", e);
-                return Ok(vec![]);
-            }
-        };
-
-        if !resp.status().is_success() {
-            warn!(
-                "SerpAPI Google Patents HTTP error {}",
-                resp.status().as_u16()
-            );
-            return Ok(vec![]);
-        }
-
-        let data: serde_json::Value = match resp.json().await {
-            Ok(d) => d,
-            Err(e) => {
-                warn!("SerpAPI Google Patents JSON parse error: {}", e);
-                return Ok(vec![]);
-            }
-        };
-
-        let organic = data
-            .get("organic_results")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-
-        let mut hits = Vec::new();
-        for item in &organic {
-            if let Some(hit) = Self::map_result(item) {
-                hits.push(hit);
-            }
-        }
-        Ok(hits)
-    }
-
-    fn map_result(item: &serde_json::Value) -> Option<PatentHit> {
-        let patent_id = item
-            .get("patent_id")
-            .or_else(|| item.get("result_id"))
-            .or_else(|| item.get("id"))
-            .and_then(|v| v.as_str())?;
-
-        let date = item
-            .get("grant_date")
-            .or_else(|| item.get("filing_date"))
-            .or_else(|| item.get("priority_date"))
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        let inventors_raw = item.get("inventor");
-        let inventors: Vec<String> = match inventors_raw {
-            Some(v) if v.is_string() => vec![v.as_str().unwrap().to_string()],
-            Some(v) if v.is_array() => v
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter_map(|i| i.as_str().map(String::from))
-                .collect(),
-            _ => vec![],
-        };
-
-        let url = item
-            .get("pdf")
-            .or_else(|| item.get("link"))
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        Some(PatentHit {
-            patent_id: patent_id.to_string(),
-            title: item.get("title").and_then(|v| v.as_str()).map(String::from),
-            date,
-            assignee: item
-                .get("assignee")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            inventors,
-            abstract_text: item
-                .get("snippet")
-                .or_else(|| item.get("abstract"))
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            source: "SerpAPI_Google_Patents".to_string(),
-            relevance: "unknown".to_string(),
-            note: String::new(),
-            prior_art: None,
-            url,
-        })
-    }
-}
-
-pub struct UsptoTextSearchBackend {
-    base_url: String,
-    client: Client,
-}
-
-impl UsptoTextSearchBackend {
-    pub fn new(base_url: Option<String>, timeout: Duration, client: Option<Client>) -> Self {
-        Self {
-            base_url: base_url
-                .unwrap_or_else(|| "https://ppubs.uspto.gov/ppubs-api/v1".to_string()),
-            client: client.unwrap_or_else(|| {
-                Client::builder()
-                    .timeout(timeout)
-                    .build()
-                    .unwrap_or_else(|_| Client::new())
-            }),
-        }
-    }
-
-    #[tracing::instrument(skip_all)]
-    pub async fn search(
-        &self,
-        query: &str,
-        date_from: Option<&str>,
-        date_to: Option<&str>,
-        max_results: usize,
-    ) -> Result<Vec<PatentHit>> {
-        let mut body = serde_json::json!({
-            "query": query,
-            "sources": ["US-PGPUB", "USPAT"],
-            "hits": max_results,
-            "start": 0,
-        });
-
-        if date_from.is_some() || date_to.is_some() {
-            body["dateRangeField"] = serde_json::json!("applicationDate");
-        }
-        if let Some(df) = date_from {
-            body["startDate"] = serde_json::json!(df);
-        }
-        if let Some(dt) = date_to {
-            body["endDate"] = serde_json::json!(dt);
-        }
-
-        let url = format!("{}/query", self.base_url.trim_end_matches('/'));
-
-        let resp = match self.client.post(&url).json(&body).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("USPTO PPUBS text search request failed: {}", e);
-                return Ok(vec![]);
-            }
-        };
-
-        if !resp.status().is_success() {
-            warn!(
-                "USPTO PPUBS text search HTTP error {}",
-                resp.status().as_u16()
-            );
-            return Ok(vec![]);
-        }
-
-        let data: serde_json::Value = match resp.json().await {
-            Ok(d) => d,
-            Err(e) => {
-                warn!("USPTO PPUBS JSON parse error: {}", e);
-                return Ok(vec![]);
-            }
-        };
-
-        let patents = data
-            .get("patents")
-            .or_else(|| data.get("results"))
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-
-        let mut hits = Vec::new();
-        for doc in &patents {
-            if let Some(hit) = Self::map_doc(doc) {
-                hits.push(hit);
-            }
-        }
-        Ok(hits)
-    }
-
-    fn map_doc(doc: &serde_json::Value) -> Option<PatentHit> {
-        let patent_id = doc
-            .get("patentNumber")
-            .or_else(|| doc.get("patent_number"))
-            .or_else(|| doc.get("documentId"))
-            .and_then(|v| v.as_str())?;
-
-        let date = doc
-            .get("grantDate")
-            .or_else(|| doc.get("grant_date"))
-            .or_else(|| doc.get("publicationDate"))
-            .or_else(|| doc.get("publication_date"))
-            .or_else(|| doc.get("filingDate"))
-            .or_else(|| doc.get("filing_date"))
-            .and_then(|v| v.as_str())
-            .map(String::from);
-
-        let inventors_raw = doc.get("inventors");
-        let inventors: Vec<String> = match inventors_raw {
-            Some(v) if v.is_string() => vec![v.as_str().unwrap().to_string()],
-            Some(v) if v.is_array() => v
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter_map(|i| i.as_str().map(String::from))
-                .collect(),
-            _ => vec![],
-        };
-
-        Some(PatentHit {
-            patent_id: patent_id.to_string(),
-            title: doc.get("title").and_then(|v| v.as_str()).map(String::from),
-            date,
-            assignee: doc
-                .get("assignee")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            inventors,
-            abstract_text: doc
-                .get("abstract")
-                .and_then(|v| v.as_str())
-                .map(String::from),
-            source: "USPTO_PPUBS".to_string(),
-            relevance: "unknown".to_string(),
-            note: String::new(),
-            prior_art: None,
-            url: None,
-        })
-    }
-}
+use super::{local_name, validate_path_segment};
 
 struct TokenState {
     token: Option<String>,
@@ -317,10 +15,10 @@ struct TokenState {
 }
 
 pub struct EpoOpsSearchBackend {
-    client_id: Option<String>,
-    client_secret: Option<String>,
-    base_url: String,
-    auth_url: String,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub base_url: String,
+    pub auth_url: String,
     token_state: Mutex<TokenState>,
     session_cache: Option<Arc<SessionCache>>,
     client: Client,
@@ -335,13 +33,10 @@ impl EpoOpsSearchBackend {
         client: Option<Client>,
         session_cache: Option<Arc<SessionCache>>,
     ) -> Self {
-        let base = base_url
-            .unwrap_or_else(|| "https://ops.epo.org/3.2/rest-services".to_string());
+        let base = base_url.unwrap_or_else(|| "https://ops.epo.org/3.2/rest-services".to_string());
         let auth_url = {
             let trimmed = base.trim_end_matches('/');
-            let root = trimmed
-                .strip_suffix("/rest-services")
-                .unwrap_or(trimmed);
+            let root = trimmed.strip_suffix("/rest-services").unwrap_or(trimmed);
             format!("{}/auth/accesstoken", root)
         };
         Self {
@@ -363,7 +58,7 @@ impl EpoOpsSearchBackend {
         }
     }
 
-    pub async fn get_oauth_token(&self) -> Result<Option<String>> {
+    pub async fn get_oauth_token(&self) -> anyhow::Result<Option<String>> {
         let client_id = match &self.client_id {
             Some(id) => id.clone(),
             None => return Ok(None),
@@ -392,7 +87,8 @@ impl EpoOpsSearchBackend {
             ("client_secret", client_secret),
         ];
 
-        let resp = match self.client
+        let resp = match self
+            .client
             .post(&self.auth_url)
             .header("Content-Type", "application/x-www-form-urlencoded")
             .form(&form_data)
@@ -449,7 +145,7 @@ impl EpoOpsSearchBackend {
         date_from: Option<&str>,
         date_to: Option<&str>,
         max_results: usize,
-    ) -> Result<Vec<PatentHit>> {
+    ) -> anyhow::Result<Vec<PatentHit>> {
         let mut cql = query.to_string();
         if date_from.is_some() || date_to.is_some() {
             let mut date_clauses = Vec::new();
@@ -475,7 +171,8 @@ impl EpoOpsSearchBackend {
         let range = format!("1-{}", max_results);
         let params = [("q", cql.as_str()), ("Range", range.as_str())];
 
-        let resp = match self.client
+        let resp = match self
+            .client
             .get(&url)
             .headers(headers)
             .query(&params)
@@ -529,7 +226,7 @@ impl EpoOpsSearchBackend {
         date_from: Option<&str>,
         date_to: Option<&str>,
         max_results: usize,
-    ) -> Result<Vec<PatentHit>> {
+    ) -> anyhow::Result<Vec<PatentHit>> {
         validate_path_segment(cpc_code, "classification code")?;
         let code_expr = if include_subclasses {
             format!("cpc={}/*", cpc_code)
@@ -545,7 +242,7 @@ impl EpoOpsSearchBackend {
         &self,
         patent_id: &str,
         direction: &str,
-    ) -> Result<Vec<String>> {
+    ) -> anyhow::Result<Vec<String>> {
         validate_path_segment(patent_id, "patent_id")?;
         let token = self.get_oauth_token().await.ok().flatten();
         let mut headers = reqwest::header::HeaderMap::new();
@@ -565,10 +262,7 @@ impl EpoOpsSearchBackend {
             let resp = match self.client.get(&url).headers(headers).send().await {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!(
-                        "EPO OPS citation fetch failed for {}: {}",
-                        patent_id, e
-                    );
+                    warn!("EPO OPS citation fetch failed for {}: {}", patent_id, e);
                     return Ok(vec![]);
                 }
             };
@@ -616,10 +310,7 @@ impl EpoOpsSearchBackend {
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn get_family(
-        &self,
-        patent_id: &str,
-    ) -> Result<Vec<serde_json::Value>> {
+    pub async fn get_family(&self, patent_id: &str) -> anyhow::Result<Vec<serde_json::Value>> {
         validate_path_segment(patent_id, "patent_id")?;
         let token = self.get_oauth_token().await.ok().flatten();
         let mut headers = reqwest::header::HeaderMap::new();
@@ -630,10 +321,7 @@ impl EpoOpsSearchBackend {
             }
         }
 
-        let url = format!(
-            "{}/family/publication/epodoc/{}",
-            self.base_url, patent_id
-        );
+        let url = format!("{}/family/publication/epodoc/{}", self.base_url, patent_id);
 
         let resp = match self.client.get(&url).headers(headers).send().await {
             Ok(r) => r,
@@ -680,7 +368,7 @@ impl EpoOpsSearchBackend {
         }
     }
 
-    fn parse_json_response(data: &serde_json::Value) -> Vec<PatentHit> {
+    pub fn parse_json_response(data: &serde_json::Value) -> Vec<PatentHit> {
         let mut hits = Vec::new();
         let ops_data = data
             .get("ops:world-patent-data")
@@ -701,9 +389,7 @@ impl EpoOpsSearchBackend {
         };
 
         for doc_wrapper in &docs_vec {
-            let doc = doc_wrapper
-                .get("exchange-document")
-                .unwrap_or(doc_wrapper);
+            let doc = doc_wrapper.get("exchange-document").unwrap_or(doc_wrapper);
             if let Some(hit) = Self::map_ops_json_doc(doc) {
                 hits.push(hit);
             }
@@ -711,7 +397,7 @@ impl EpoOpsSearchBackend {
         hits
     }
 
-    fn map_ops_json_doc(doc: &serde_json::Value) -> Option<PatentHit> {
+    pub fn map_ops_json_doc(doc: &serde_json::Value) -> Option<PatentHit> {
         let patent_id_raw = doc
             .get("@doc-number")
             .or_else(|| doc.get("doc-number"))
@@ -735,7 +421,10 @@ impl EpoOpsSearchBackend {
             return None;
         }
 
-        let biblio = doc.get("bibliographic-data").cloned().unwrap_or(serde_json::json!({}));
+        let biblio = doc
+            .get("bibliographic-data")
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
 
         let title = {
             let title_data = biblio.get("invention-title");
@@ -747,10 +436,7 @@ impl EpoOpsSearchBackend {
             let mut result: Option<String> = None;
             for t in &title_items {
                 if let Some(obj) = t.as_object() {
-                    let lang = obj
-                        .get("@lang")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let lang = obj.get("@lang").and_then(|v| v.as_str()).unwrap_or("");
                     let val = obj
                         .get("$")
                         .or_else(|| obj.get("#text"))
@@ -809,10 +495,11 @@ impl EpoOpsSearchBackend {
         };
 
         let inventors = {
-            let parties = biblio.get("parties").cloned().unwrap_or(serde_json::json!({}));
-            let inv_section = parties
-                .get("inventors")
-                .and_then(|v| v.get("inventor"));
+            let parties = biblio
+                .get("parties")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            let inv_section = parties.get("inventors").and_then(|v| v.get("inventor"));
             let inv_list: Vec<&serde_json::Value> = match inv_section {
                 Some(v) if v.is_array() => v.as_array().unwrap().iter().collect(),
                 Some(v) if v.is_object() => vec![v],
@@ -820,9 +507,7 @@ impl EpoOpsSearchBackend {
             };
             let mut names = Vec::new();
             for inv in &inv_list {
-                let name_data = inv
-                    .get("inventor-name")
-                    .and_then(|v| v.get("name"));
+                let name_data = inv.get("inventor-name").and_then(|v| v.get("name"));
                 if let Some(nd) = name_data {
                     if nd.is_object() {
                         let name = nd
@@ -841,10 +526,11 @@ impl EpoOpsSearchBackend {
         };
 
         let assignee = {
-            let parties = biblio.get("parties").cloned().unwrap_or(serde_json::json!({}));
-            let app_section = parties
-                .get("applicants")
-                .and_then(|v| v.get("applicant"));
+            let parties = biblio
+                .get("parties")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            let app_section = parties.get("applicants").and_then(|v| v.get("applicant"));
             let app_list: Vec<&serde_json::Value> = match app_section {
                 Some(v) if v.is_array() => v.as_array().unwrap().iter().collect(),
                 Some(v) if v.is_object() => vec![v],
@@ -852,9 +538,7 @@ impl EpoOpsSearchBackend {
             };
             let mut result: Option<String> = None;
             for app in &app_list {
-                let name_data = app
-                    .get("applicant-name")
-                    .and_then(|v| v.get("name"));
+                let name_data = app.get("applicant-name").and_then(|v| v.get("name"));
                 if let Some(nd) = name_data {
                     if nd.is_object() {
                         let val = nd
@@ -875,25 +559,17 @@ impl EpoOpsSearchBackend {
         };
 
         Some(PatentHit {
-            patent_id,
             title,
             date,
             assignee,
             inventors,
-            abstract_text: None,
-            source: "EPO_OPS".to_string(),
-            relevance: "unknown".to_string(),
-            note: String::new(),
-            prior_art: None,
-            url: None,
+            ..PatentHit::new(patent_id, super::SOURCE_EPO_OPS)
         })
     }
 
-    fn extract_ids_from_json(data: &serde_json::Value) -> Vec<String> {
+    pub fn extract_ids_from_json(data: &serde_json::Value) -> Vec<String> {
         let mut ids = Vec::new();
-        let world_data = data
-            .get("ops:world-patent-data")
-            .unwrap_or(data);
+        let world_data = data.get("ops:world-patent-data").unwrap_or(data);
         let citation_list = world_data.get("ops:citation");
         let citations: Vec<&serde_json::Value> = match citation_list {
             Some(v) if v.is_array() => v.as_array().unwrap().iter().collect(),
@@ -901,9 +577,7 @@ impl EpoOpsSearchBackend {
             _ => vec![],
         };
         for c in &citations {
-            let doc_id = c
-                .get("patcit")
-                .and_then(|v| v.get("document-id"));
+            let doc_id = c.get("patcit").and_then(|v| v.get("document-id"));
             if let Some(di) = doc_id {
                 let num = di.get("doc-number");
                 let val = match num {
@@ -929,11 +603,9 @@ impl EpoOpsSearchBackend {
         ids
     }
 
-    fn parse_family_json(data: &serde_json::Value) -> Vec<serde_json::Value> {
+    pub fn parse_family_json(data: &serde_json::Value) -> Vec<serde_json::Value> {
         let mut members = Vec::new();
-        let world_data = data
-            .get("ops:world-patent-data")
-            .unwrap_or(data);
+        let world_data = data.get("ops:world-patent-data").unwrap_or(data);
         let family_data = world_data
             .get("ops:patent-family")
             .cloned()
@@ -1005,9 +677,9 @@ impl EpoOpsSearchBackend {
         members
     }
 
-    fn parse_xml_search_response(body: &str) -> Vec<PatentHit> {
-        use quick_xml::Reader;
+    pub fn parse_xml_search_response(body: &str) -> Vec<PatentHit> {
         use quick_xml::events::Event;
+        use quick_xml::Reader;
 
         let mut reader = Reader::from_str(body);
         reader.config_mut().trim_text(true);
@@ -1057,19 +729,7 @@ impl EpoOpsSearchBackend {
                         if !doc_number.is_empty() {
                             let patent_id = format!("{}{}{}", country, doc_number, kind);
                             if !patent_id.trim().is_empty() {
-                                hits.push(PatentHit {
-                                    patent_id,
-                                    title: None,
-                                    date: None,
-                                    assignee: None,
-                                    inventors: vec![],
-                                    abstract_text: None,
-                                    source: "EPO_OPS".to_string(),
-                                    relevance: "unknown".to_string(),
-                                    note: String::new(),
-                                    prior_art: None,
-                                    url: None,
-                                });
+                                hits.push(PatentHit::new(patent_id, super::SOURCE_EPO_OPS));
                             }
                         }
                     }
@@ -1089,9 +749,9 @@ impl EpoOpsSearchBackend {
         hits
     }
 
-    fn parse_xml_citations_response(body: &str) -> Vec<String> {
-        use quick_xml::Reader;
+    pub fn parse_xml_citations_response(body: &str) -> Vec<String> {
         use quick_xml::events::Event;
+        use quick_xml::Reader;
 
         let mut reader = Reader::from_str(body);
         reader.config_mut().trim_text(true);
@@ -1155,9 +815,9 @@ impl EpoOpsSearchBackend {
         ids
     }
 
-    fn parse_xml_family_response(body: &str) -> Vec<serde_json::Value> {
-        use quick_xml::Reader;
+    pub fn parse_xml_family_response(body: &str) -> Vec<serde_json::Value> {
         use quick_xml::events::Event;
+        use quick_xml::Reader;
 
         let mut reader = Reader::from_str(body);
         reader.config_mut().trim_text(true);
@@ -1233,147 +893,10 @@ impl EpoOpsSearchBackend {
     }
 }
 
-fn local_name(raw: &[u8]) -> String {
-    let name = String::from_utf8_lossy(raw);
-    match name.rfind(':') {
-        Some(pos) => name[pos + 1..].to_string(),
-        None => name.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn make_serpapi_organic_result(
-        patent_id: &str,
-        title: &str,
-    ) -> serde_json::Value {
-        serde_json::json!({
-            "patent_id": patent_id,
-            "title": title,
-            "grant_date": "2020-01-15",
-            "assignee": "Test Corp",
-            "inventor": ["Alice", "Bob"],
-            "snippet": "A test abstract",
-            "pdf": "https://example.com/test.pdf",
-        })
-    }
-
-    #[test]
-    fn serpapi_map_result_basic() {
-        let item = make_serpapi_organic_result("US1234567", "Test Patent");
-        let hit = SerpApiGooglePatentsBackend::map_result(&item).unwrap();
-        assert_eq!(hit.patent_id, "US1234567");
-        assert_eq!(hit.title.as_deref(), Some("Test Patent"));
-        assert_eq!(hit.date.as_deref(), Some("2020-01-15"));
-        assert_eq!(hit.assignee.as_deref(), Some("Test Corp"));
-        assert_eq!(hit.inventors, vec!["Alice", "Bob"]);
-        assert_eq!(
-            hit.abstract_text.as_deref(),
-            Some("A test abstract")
-        );
-        assert_eq!(hit.source, "SerpAPI_Google_Patents");
-        assert_eq!(
-            hit.url.as_deref(),
-            Some("https://example.com/test.pdf")
-        );
-    }
-
-    #[test]
-    fn serpapi_map_result_no_patent_id_returns_none() {
-        let item = serde_json::json!({
-            "title": "No ID",
-        });
-        assert!(SerpApiGooglePatentsBackend::map_result(&item).is_none());
-    }
-
-    #[test]
-    fn serpapi_map_result_fallback_id_fields() {
-        let item = serde_json::json!({
-            "result_id": "EP9999999",
-            "title": "Fallback",
-        });
-        let hit = SerpApiGooglePatentsBackend::map_result(&item).unwrap();
-        assert_eq!(hit.patent_id, "EP9999999");
-    }
-
-    #[test]
-    fn serpapi_map_result_string_inventor() {
-        let item = serde_json::json!({
-            "id": "US111",
-            "title": "Single",
-            "inventor": "Solo Inventor",
-        });
-        let hit = SerpApiGooglePatentsBackend::map_result(&item).unwrap();
-        assert_eq!(hit.inventors, vec!["Solo Inventor"]);
-    }
-
-    #[test]
-    fn serpapi_map_result_date_fallback() {
-        let item = serde_json::json!({
-            "patent_id": "US222",
-            "title": "T",
-            "filing_date": "2019-06-01",
-        });
-        let hit = SerpApiGooglePatentsBackend::map_result(&item).unwrap();
-        assert_eq!(hit.date.as_deref(), Some("2019-06-01"));
-    }
-
-    #[test]
-    fn uspto_map_doc_basic() {
-        let doc = serde_json::json!({
-            "patentNumber": "US9876543",
-            "title": "USPTO Patent",
-            "grantDate": "2021-03-20",
-            "assignee": "USPTO Corp",
-            "inventors": ["Carol"],
-            "abstract": "USPTO abstract text",
-        });
-        let hit = UsptoTextSearchBackend::map_doc(&doc).unwrap();
-        assert_eq!(hit.patent_id, "US9876543");
-        assert_eq!(hit.title.as_deref(), Some("USPTO Patent"));
-        assert_eq!(hit.date.as_deref(), Some("2021-03-20"));
-        assert_eq!(hit.assignee.as_deref(), Some("USPTO Corp"));
-        assert_eq!(hit.inventors, vec!["Carol"]);
-        assert_eq!(hit.source, "USPTO_PPUBS");
-    }
-
-    #[test]
-    fn uspto_map_doc_no_patent_id_returns_none() {
-        let doc = serde_json::json!({"title": "No number"});
-        assert!(UsptoTextSearchBackend::map_doc(&doc).is_none());
-    }
-
-    #[test]
-    fn uspto_map_doc_fallback_id_fields() {
-        let doc = serde_json::json!({
-            "documentId": "EP5555555",
-            "title": "Doc ID Fallback",
-        });
-        let hit = UsptoTextSearchBackend::map_doc(&doc).unwrap();
-        assert_eq!(hit.patent_id, "EP5555555");
-    }
-
-    #[test]
-    fn uspto_map_doc_date_fallback_chain() {
-        let doc = serde_json::json!({
-            "patentNumber": "US333",
-            "publicationDate": "2022-07-15",
-        });
-        let hit = UsptoTextSearchBackend::map_doc(&doc).unwrap();
-        assert_eq!(hit.date.as_deref(), Some("2022-07-15"));
-    }
-
-    #[test]
-    fn uspto_map_doc_string_inventors() {
-        let doc = serde_json::json!({
-            "patentNumber": "US444",
-            "inventors": "Single Name",
-        });
-        let hit = UsptoTextSearchBackend::map_doc(&doc).unwrap();
-        assert_eq!(hit.inventors, vec!["Single Name"]);
-    }
+    use std::time::Duration;
 
     #[test]
     fn epo_ops_parse_json_response_basic() {
@@ -1541,15 +1064,10 @@ mod tests {
 
     #[test]
     fn epo_ops_constructor_default_urls() {
-        let backend = EpoOpsSearchBackend::new(None, None, None, Duration::from_secs(30), None, None);
-        assert_eq!(
-            backend.base_url,
-            "https://ops.epo.org/3.2/rest-services"
-        );
-        assert_eq!(
-            backend.auth_url,
-            "https://ops.epo.org/3.2/auth/accesstoken"
-        );
+        let backend =
+            EpoOpsSearchBackend::new(None, None, None, Duration::from_secs(30), None, None);
+        assert_eq!(backend.base_url, "https://ops.epo.org/3.2/rest-services");
+        assert_eq!(backend.auth_url, "https://ops.epo.org/3.2/auth/accesstoken");
     }
 
     #[test]
@@ -1563,10 +1081,7 @@ mod tests {
             None,
         );
         assert_eq!(backend.base_url, "https://custom.epo.org/rest-services");
-        assert_eq!(
-            backend.auth_url,
-            "https://custom.epo.org/auth/accesstoken"
-        );
+        assert_eq!(backend.auth_url, "https://custom.epo.org/auth/accesstoken");
     }
 
     #[test]
@@ -1579,33 +1094,21 @@ mod tests {
             None,
             None,
         );
-        assert_eq!(backend.auth_url, "https://custom.epo.org/api/auth/accesstoken");
+        assert_eq!(
+            backend.auth_url,
+            "https://custom.epo.org/api/auth/accesstoken"
+        );
     }
 
     #[test]
     fn epo_ops_get_oauth_token_no_credentials() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let backend = EpoOpsSearchBackend::new(None, None, None, Duration::from_secs(30), None, None);
+            let backend =
+                EpoOpsSearchBackend::new(None, None, None, Duration::from_secs(30), None, None);
             let token = backend.get_oauth_token().await.unwrap();
             assert!(token.is_none());
         });
-    }
-
-    #[test]
-    fn serpapi_constructor_default_url() {
-        let backend = SerpApiGooglePatentsBackend::new("test-key".to_string(), None, Duration::from_secs(30), None);
-        assert_eq!(backend.api_key, "test-key");
-        assert_eq!(backend.base_url, "https://serpapi.com/search");
-    }
-
-    #[test]
-    fn uspto_constructor_default_url() {
-        let backend = UsptoTextSearchBackend::new(None, Duration::from_secs(30), None);
-        assert_eq!(
-            backend.base_url,
-            "https://ppubs.uspto.gov/ppubs-api/v1"
-        );
     }
 
     #[test]
@@ -1856,24 +1359,5 @@ mod tests {
         });
         let hit = EpoOpsSearchBackend::map_ops_json_doc(&doc).unwrap();
         assert_eq!(hit.date.as_deref(), Some("2019-06-15"));
-    }
-
-    #[test]
-    fn serpapi_map_result_priority_date_fallback() {
-        let item = serde_json::json!({
-            "patent_id": "US9876543",
-            "title": "Priority Date Test",
-            "priority_date": "2018-03-20",
-            "inventor": ["Carol"],
-        });
-        let hit = SerpApiGooglePatentsBackend::map_result(&item).unwrap();
-        assert_eq!(hit.date.as_deref(), Some("2018-03-20"));
-    }
-
-    #[test]
-    fn test_local_name_strips_namespace() {
-        assert_eq!(local_name(b"ex:country"), "country");
-        assert_eq!(local_name(b"country"), "country");
-        assert_eq!(local_name(b"ops:world-patent-data"), "world-patent-data");
     }
 }

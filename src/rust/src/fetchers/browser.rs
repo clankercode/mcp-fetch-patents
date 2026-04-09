@@ -140,27 +140,35 @@ fn parse_google_patents_metadata(html: &str, patent: &CanonicalPatentId) -> Opti
 
     let assignee = text_content(&document, r#"[itemprop="assigneeCurrent"]"#)
         .or_else(|| text_content(&document, r#"[itemprop="assigneeOriginal"]"#))
-        .or_else(|| meta_content_with_attr(
-            &document,
-            r#"meta[name="DC.contributor"][scheme="assignee"]"#,
-            "content",
-        ));
+        .or_else(|| {
+            meta_content_with_attr(
+                &document,
+                r#"meta[name="DC.contributor"][scheme="assignee"]"#,
+                "content",
+            )
+        });
 
-    let filing_date = datetime_attr(&document, r#"time[itemprop="filingDate"]"#)
-        .or_else(|| meta_content_with_attr(
+    let filing_date = datetime_attr(&document, r#"time[itemprop="filingDate"]"#).or_else(|| {
+        meta_content_with_attr(
             &document,
             r#"meta[name="DC.date"][scheme="dateSubmitted"]"#,
             "content",
-        ));
+        )
+    });
 
-    let publication_date = datetime_attr(&document, r#"time[itemprop="publicationDate"]"#)
-        .or_else(|| meta_content_with_attr(
-            &document,
-            r#"meta[name="DC.date"][scheme="issue"]"#,
-            "content",
-        ));
+    let publication_date =
+        datetime_attr(&document, r#"time[itemprop="publicationDate"]"#).or_else(|| {
+            meta_content_with_attr(
+                &document,
+                r#"meta[name="DC.date"][scheme="issue"]"#,
+                "content",
+            )
+        });
 
-    let legal_status = text_content(&document, r#"[itemprop="legalStatusIfi"] [itemprop="status"]"#);
+    let legal_status = text_content(
+        &document,
+        r#"[itemprop="legalStatusIfi"] [itemprop="status"]"#,
+    );
 
     if title.is_none()
         && abstract_text.is_none()

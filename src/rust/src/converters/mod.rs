@@ -44,24 +44,20 @@ pub struct ImageResult {
 /// - For unknown names: returns `false`.
 pub fn check_tool_available(name: &str) -> bool {
     match name {
-        "pymupdf4llm" | "pdfplumber" | "marker" => {
-            std::process::Command::new("python3")
-                .args(["-c", &format!("import {name}")])
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-        }
-        "pdftotext" | "tesseract" => {
-            std::process::Command::new("which")
-                .arg(name)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .map(|s| s.success())
-                .unwrap_or(false)
-        }
+        "pymupdf4llm" | "pdfplumber" | "marker" => std::process::Command::new("python3")
+            .args(["-c", &format!("import {name}")])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false),
+        "pdftotext" | "tesseract" => std::process::Command::new("which")
+            .arg(name)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false),
         _ => false,
     }
 }
@@ -90,6 +86,7 @@ pub fn check_available_tools(config: &PatentConfig) -> HashMap<String, bool> {
 // ---------------------------------------------------------------------------
 
 /// PDF to Markdown conversion pipeline.
+#[derive(Clone)]
 pub struct ConverterPipeline {
     order: Vec<String>,
     disabled: Vec<String>,
@@ -184,7 +181,7 @@ except Exception as e:
         let status = std::process::Command::new("python3")
             .arg("-c")
             .arg(script)
-            .arg(pdf_path)    // sys.argv[1] — path passed safely as argument, not interpolated
+            .arg(pdf_path) // sys.argv[1] — path passed safely as argument, not interpolated
             .arg(output_path) // sys.argv[2] — same
             .status();
 
@@ -199,7 +196,10 @@ except Exception as e:
                 success: false,
                 output_path: None,
                 converter_used: Some("pymupdf".into()),
-                error: Some(format!("pdf_to_text failed with exit code: {}", s.code().unwrap_or(-1))),
+                error: Some(format!(
+                    "pdf_to_text failed with exit code: {}",
+                    s.code().unwrap_or(-1)
+                )),
             }),
             Err(e) => Ok(ConversionResult {
                 success: false,
@@ -351,10 +351,7 @@ except Exception as e:
         let mut parts: Vec<String> = Vec::new();
 
         // Header
-        let title = metadata
-            .title
-            .as_deref()
-            .unwrap_or(&metadata.canonical_id);
+        let title = metadata.title.as_deref().unwrap_or(&metadata.canonical_id);
         parts.push(format!("# {title}"));
         parts.push(String::new());
 
@@ -525,8 +522,16 @@ mod tests {
     #[test]
     fn test_pipeline_all_disabled_returns_failure() {
         let pipeline = ConverterPipeline::new(
-            vec!["pymupdf4llm".into(), "pdfplumber".into(), "pdftotext".into()],
-            vec!["pymupdf4llm".into(), "pdfplumber".into(), "pdftotext".into()],
+            vec![
+                "pymupdf4llm".into(),
+                "pdfplumber".into(),
+                "pdftotext".into(),
+            ],
+            vec![
+                "pymupdf4llm".into(),
+                "pdfplumber".into(),
+                "pdftotext".into(),
+            ],
         );
         let result = pipeline
             .pdf_to_markdown(
@@ -676,15 +681,9 @@ mod tests {
 
     #[test]
     fn test_marker_in_pipeline_when_disabled() {
-        let pipeline = ConverterPipeline::new(
-            vec!["marker".into()],
-            vec!["marker".into()],
-        );
+        let pipeline = ConverterPipeline::new(vec!["marker".into()], vec!["marker".into()]);
         let result = pipeline
-            .pdf_to_markdown(
-                Path::new("/nonexistent.pdf"),
-                Path::new("/nonexistent.md"),
-            )
+            .pdf_to_markdown(Path::new("/nonexistent.pdf"), Path::new("/nonexistent.md"))
             .unwrap();
         assert!(!result.success);
     }

@@ -117,6 +117,88 @@ def _run(coro):
 
 
 @mcp.tool()
+def patent_status() -> dict[str, Any]:
+    """Check server health, configured API keys, cache stats, and tool availability.
+
+    Use this to diagnose why searches return no results.
+
+    Returns:
+        API key status (set/not set), cache directory and count, browser availability,
+        converter tools available, and session directory.
+    """
+    import shutil
+
+    cfg = _get_config()
+
+    api_keys = {
+        "serpapi_key": "set" if cfg.serpapi_key else "not set",
+        "epo_client_id": "set" if cfg.epo_client_id else "not set",
+        "epo_client_secret": "set" if cfg.epo_client_secret else "not set",
+        "lens_api_key": "set" if cfg.lens_api_key else "not set",
+        "bing_key": "set" if cfg.bing_key else "not set",
+    }
+
+    cache_dir = Path(cfg.cache_local_dir)
+    cached_patents = 0
+    if cache_dir.exists():
+        cached_patents = sum(1 for _ in cache_dir.iterdir() if _.is_dir())
+
+    browser_available = (
+        shutil.which("chromium") is not None or shutil.which("chrome") is not None
+    )
+    try:
+        from playwright.sync_api import sync_playwright
+
+        browser_available = True
+    except ImportError:
+        pass
+
+    converters_available: list[str] = []
+    for conv in cfg.converters_order:
+        if conv in cfg.converters_disabled:
+            continue
+        if conv == "pymupdf4llm":
+            try:
+                import pymupdf4llm
+
+                converters_available.append(conv)
+            except ImportError:
+                pass
+        elif conv == "pdfplumber":
+            try:
+                import pdfplumber
+
+                converters_available.append(conv)
+            except ImportError:
+                pass
+        elif conv == "pdftotext":
+            if shutil.which("pdftotext"):
+                converters_available.append(conv)
+        else:
+            converters_available.append(conv)
+
+    sm = _get_session_manager()
+    sessions_count = len(sm.list_sessions(limit=9999))
+
+    return {
+        "status": "ok",
+        "api_keys": api_keys,
+        "cache": {
+            "directory": str(cache_dir),
+            "patent_count": cached_patents,
+        },
+        "browser_available": browser_available,
+        "converters_available": converters_available,
+        "sessions": {
+            "directory": str(sm.sessions_dir),
+            "count": sessions_count,
+        },
+        "search_backend_default": cfg.search_backend_default,
+        "isError": False,
+    }
+
+
+@mcp.tool()
 def patent_session_create(
     topic: str,
     prior_art_cutoff: str | None = None,
@@ -693,11 +775,10 @@ def patent_citation_chain(
     if session_id:
         try:
             sm = _get_session_manager()
-            session = sm.load_session(session_id)
-            if session.citation_chains is None:
-                session.citation_chains = {}
-            session.citation_chains[patent_id] = tree["citations"]
-            sm.save_session(session)
+            with sm.update_session(session_id) as session:
+                if session.citation_chains is None:
+                    session.citation_chains = {}
+                session.citation_chains[patent_id] = tree["citations"]
         except Exception as e:
             log.warning("Failed to save citation chain to session: %s", e)
 
@@ -756,10 +837,9 @@ def patent_classification_search(
         _save_to_session(session_id, queries_run, hits)
         try:
             sm = _get_session_manager()
-            session = sm.load_session(session_id)
-            if code not in session.classifications_explored:
-                session.classifications_explored.append(code)
-                sm.save_session(session)
+            with sm.update_session(session_id) as session:
+                if code not in session.classifications_explored:
+                    session.classifications_explored.append(code)
         except Exception:
             pass
 
@@ -806,13 +886,12 @@ def patent_family_search(
     if session_id and family_members:
         try:
             sm = _get_session_manager()
-            session = sm.load_session(session_id)
-            if session.patent_families is None:
-                session.patent_families = {}
-            session.patent_families[patent_id] = [
-                m.get("patent_id", "") for m in family_members
-            ]
-            sm.save_session(session)
+            with sm.update_session(session_id) as session:
+                if session.patent_families is None:
+                    session.patent_families = {}
+                session.patent_families[patent_id] = [
+                    m.get("patent_id", "") for m in family_members
+                ]
         except Exception as e:
             log.warning("Failed to save family data to session: %s", e)
 

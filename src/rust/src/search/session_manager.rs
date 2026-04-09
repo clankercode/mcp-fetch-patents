@@ -61,10 +61,6 @@ struct IndexFile {
     sessions: Vec<SessionSummary>,
 }
 
-fn now_iso() -> String {
-    Utc::now().to_rfc3339()
-}
-
 fn validate_session_id(id: &str) -> Result<()> {
     if id.is_empty() {
         anyhow::bail!("Session ID cannot be empty");
@@ -154,7 +150,7 @@ impl SessionManager {
         prior_art_cutoff: Option<&str>,
         notes: &str,
     ) -> Result<Session> {
-        let now = now_iso();
+        let now = crate::now_iso();
         let slug = make_slug(topic);
         let ts = Utc::now().format("%Y%m%d-%H%M%S").to_string();
         let session_id = format!("{}-{}", ts, slug);
@@ -199,7 +195,7 @@ impl SessionManager {
     }
 
     pub async fn save_session(&self, session: &mut Session) -> Result<String> {
-        let modified = now_iso();
+        let modified = crate::now_iso();
         session.modified_at = modified.clone();
         let dir = self.dir.clone();
         let sid = session.session_id.clone();
@@ -546,7 +542,7 @@ mod tests {
     fn make_query(id: &str, results: Vec<PatentHit>) -> QueryRecord {
         QueryRecord {
             query_id: id.to_string(),
-            timestamp: now_iso(),
+            timestamp: crate::now_iso(),
             source: "USPTO".to_string(),
             query_text: "test query".to_string(),
             result_count: results.len() as i64,
@@ -659,9 +655,7 @@ mod tests {
 
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        mgr.add_note(&s1.session_id, "update first")
-            .await
-            .unwrap();
+        mgr.add_note(&s1.session_id, "update first").await.unwrap();
 
         let _s2 = mgr.create_session("Second", None, "").await.unwrap();
 
@@ -965,10 +959,7 @@ mod tests {
         assert_eq!(loaded.notes, "test notes");
         assert_eq!(loaded.queries.len(), 1);
         assert_eq!(loaded.queries[0].source, "EPO_OPS");
-        assert_eq!(
-            loaded.queries[0].results[0].inventors,
-            vec!["Alice", "Bob"]
-        );
+        assert_eq!(loaded.queries[0].results[0].inventors, vec!["Alice", "Bob"]);
         assert_eq!(loaded.queries[0].results[0].prior_art, Some(true));
         assert_eq!(
             loaded.queries[0].metadata,
@@ -1040,15 +1031,10 @@ mod tests {
         mgr.save_session(&mut session).await.unwrap();
 
         let loaded = mgr
-            .load_session(
-                &mgr.list_sessions(None).await.unwrap()[0].session_id,
-            )
+            .load_session(&mgr.list_sessions(None).await.unwrap()[0].session_id)
             .await
             .unwrap();
-        let output = mgr
-            .export_markdown(&loaded.session_id, None)
-            .await
-            .unwrap();
+        let output = mgr.export_markdown(&loaded.session_id, None).await.unwrap();
         let content = fs::read_to_string(&output).unwrap();
         assert!(content.contains("H02J50"));
         assert!(content.contains("H01F38"));

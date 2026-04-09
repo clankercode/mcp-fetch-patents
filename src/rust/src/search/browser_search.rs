@@ -11,6 +11,8 @@ use tracing::warn;
 use crate::ranking::PatentHit;
 use crate::search::profile_manager::ProfileManager;
 
+const SOURCE_BROWSER: &str = "Google_Patents_Browser";
+
 pub const BROWSER_USER_AGENT: &str =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
 
@@ -72,14 +74,21 @@ impl GooglePatentsBrowserSearch {
         date_after: Option<&str>,
         max_results: usize,
     ) -> Result<Vec<PatentHit>> {
-        if let Err(e) = self.profile_manager.acquire_lock(&self.profile_name, "search") {
+        if let Err(e) = self
+            .profile_manager
+            .acquire_lock(&self.profile_name, "search")
+        {
             warn!("Failed to acquire profile lock: {}", e);
             return Ok(vec![]);
         }
 
-        let _lock_guard = LockGuard { pm: &self.profile_manager, name: &self.profile_name };
+        let _lock_guard = LockGuard {
+            pm: &self.profile_manager,
+            name: &self.profile_name,
+        };
 
-        self.run_search(query, date_before, date_after, max_results).await
+        self.run_search(query, date_before, date_after, max_results)
+            .await
     }
 
     async fn run_search(
@@ -119,9 +128,8 @@ impl GooglePatentsBrowserSearch {
             }
         };
 
-        let handler_task = tokio::spawn(async move {
-            while let Some(_h) = handler.next().await {}
-        });
+        let handler_task =
+            tokio::spawn(async move { while let Some(_h) = handler.next().await {} });
 
         let page = match browser.new_page("about:blank").await {
             Ok(p) => p,
@@ -176,7 +184,12 @@ impl GooglePatentsBrowserSearch {
     }
 }
 
-fn build_search_url(query: &str, date_before: Option<&str>, date_after: Option<&str>, page: u32) -> String {
+fn build_search_url(
+    query: &str,
+    date_before: Option<&str>,
+    date_after: Option<&str>,
+    page: u32,
+) -> String {
     let encoded = urlencoding(query);
     let mut url = format!("https://patents.google.com/?q={}", encoded);
 
@@ -275,17 +288,15 @@ async fn strategy_structured_elements(page: &Page) -> Vec<PatentHit> {
             let date = get_child_text(element, ".date, time").await;
 
             hits.push(PatentHit {
-                patent_id: patent_id.clone(),
                 title,
                 date,
                 assignee,
-                inventors: vec![],
                 abstract_text,
-                source: "Google_Patents_Browser".to_string(),
-                relevance: "unknown".to_string(),
-                note: String::new(),
-                prior_art: None,
-                url: Some(format!("https://patents.google.com/patent/{}/en", patent_id)),
+                url: Some(format!(
+                    "https://patents.google.com/patent/{}/en",
+                    patent_id
+                )),
+                ..PatentHit::new(patent_id, SOURCE_BROWSER)
             });
         }
 
@@ -334,17 +345,13 @@ async fn strategy_patent_links(page: &Page) -> Vec<PatentHit> {
             .filter(|s| !s.is_empty());
 
         hits.push(PatentHit {
-            patent_id: patent_id.clone(),
             title,
-            date: None,
-            assignee: None,
-            inventors: vec![],
             abstract_text,
-            source: "Google_Patents_Browser".to_string(),
-            relevance: "unknown".to_string(),
-            note: String::new(),
-            prior_art: None,
-            url: Some(format!("https://patents.google.com/patent/{}/en", patent_id)),
+            url: Some(format!(
+                "https://patents.google.com/patent/{}/en",
+                patent_id
+            )),
+            ..PatentHit::new(patent_id, SOURCE_BROWSER)
         });
     }
 
@@ -371,17 +378,11 @@ async fn strategy_regex_body(page: &Page) -> Vec<PatentHit> {
         }
 
         hits.push(PatentHit {
-            patent_id: patent_id.clone(),
-            title: None,
-            date: None,
-            assignee: None,
-            inventors: vec![],
-            abstract_text: None,
-            source: "Google_Patents_Browser".to_string(),
-            relevance: "unknown".to_string(),
-            note: String::new(),
-            prior_art: None,
-            url: Some(format!("https://patents.google.com/patent/{}/en", patent_id)),
+            url: Some(format!(
+                "https://patents.google.com/patent/{}/en",
+                patent_id
+            )),
+            ..PatentHit::new(patent_id, SOURCE_BROWSER)
         });
     }
 
@@ -425,7 +426,12 @@ mod tests {
 
     #[test]
     fn test_build_search_url_with_dates() {
-        let url = build_search_url("machine learning", Some("2020-12-31"), Some("2019-01-01"), 0);
+        let url = build_search_url(
+            "machine learning",
+            Some("2020-12-31"),
+            Some("2019-01-01"),
+            0,
+        );
         assert!(url.contains("q=machine+learning"));
         assert!(url.contains("&before=priority:20201231"));
         assert!(url.contains("&after=priority:20190101"));
@@ -520,14 +526,7 @@ mod tests {
 
     #[test]
     fn test_constructor_creates_instance() {
-        let search = GooglePatentsBrowserSearch::new(
-            None,
-            "test-profile",
-            true,
-            30000,
-            2,
-            None,
-        );
+        let search = GooglePatentsBrowserSearch::new(None, "test-profile", true, 30000, 2, None);
         assert_eq!(search.profile_name, "test-profile");
         assert!(search.headless);
         assert_eq!(search.timeout_ms, 30000);

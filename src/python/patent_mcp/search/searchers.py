@@ -31,9 +31,12 @@ class SerpApiGooglePatentsBackend:
 
     SERPAPI_URL = "https://serpapi.com/search"
 
-    def __init__(self, api_key: str, base_url: str | None = None) -> None:
+    def __init__(
+        self, api_key: str, base_url: str | None = None, timeout: float = 30
+    ) -> None:
         self._api_key = api_key
         self._base_url = base_url or self.SERPAPI_URL
+        self._client = httpx.AsyncClient(timeout=timeout)
 
     async def search(
         self,
@@ -69,10 +72,9 @@ class SerpApiGooglePatentsBackend:
             params["type"] = patent_type
 
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.get(self._base_url, params=params)
-                resp.raise_for_status()
-                data = resp.json()
+            resp = await self._client.get(self._base_url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
         except httpx.HTTPStatusError as exc:
             log.warning(
                 "SerpAPI Google Patents HTTP error %s: %s",
@@ -142,8 +144,9 @@ class UsptoTextSearchBackend:
 
     PPUBS_BASE = "https://ppubs.uspto.gov/ppubs-api/v1"
 
-    def __init__(self, base_url: str | None = None) -> None:
+    def __init__(self, base_url: str | None = None, timeout: float = 30) -> None:
         self._base = (base_url or self.PPUBS_BASE).rstrip("/")
+        self._client = httpx.AsyncClient(timeout=timeout)
 
     async def search(
         self,
@@ -171,10 +174,9 @@ class UsptoTextSearchBackend:
 
         url = f"{self._base}/query"
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(url, json=body)
-                resp.raise_for_status()
-                data = resp.json()
+            resp = await self._client.post(url, json=body)
+            resp.raise_for_status()
+            data = resp.json()
         except httpx.HTTPStatusError as exc:
             log.warning(
                 "USPTO PPUBS text search HTTP error %s: %s",
@@ -250,13 +252,12 @@ class EpoOpsSearchBackend:
         client_id: str | None = None,
         client_secret: str | None = None,
         base_url: str | None = None,
+        timeout: float = 30,
     ) -> None:
         self._client_id = client_id
         self._client_secret = client_secret
         self._base = (base_url or self.OPS_BASE).rstrip("/")
-        # Determine auth URL from base_url if provided (replace last path component)
         if base_url:
-            # Strip rest-services suffix to get root, then append auth path
             root = base_url.rstrip("/")
             if root.endswith("/rest-services"):
                 root = root[: -len("/rest-services")]
@@ -265,7 +266,8 @@ class EpoOpsSearchBackend:
             self._auth_url = self._AUTH_URL
 
         self._token: str | None = None
-        self._token_expires_at: float = 0.0  # monotonic timestamp
+        self._token_expires_at: float = 0.0
+        self._client = httpx.AsyncClient(timeout=timeout)
 
     # ------------------------------------------------------------------
     # OAuth
@@ -284,24 +286,23 @@ class EpoOpsSearchBackend:
             return self._token
 
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(
-                    self._auth_url,
-                    data={
-                        "grant_type": "client_credentials",
-                        "client_id": self._client_id,
-                        "client_secret": self._client_secret,
-                    },
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                token = data.get("access_token")
-                expires_in = int(data.get("expires_in", 1800))
-                if token:
-                    self._token = token
-                    self._token_expires_at = time.monotonic() + expires_in
-                return token
+            resp = await self._client.post(
+                self._auth_url,
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": self._client_id,
+                    "client_secret": self._client_secret,
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            token = data.get("access_token")
+            expires_in = int(data.get("expires_in", 1800))
+            if token:
+                self._token = token
+                self._token_expires_at = time.monotonic() + expires_in
+            return token
         except httpx.HTTPStatusError as exc:
             log.warning("EPO OPS OAuth failed: %s", exc)
             return None
@@ -345,15 +346,13 @@ class EpoOpsSearchBackend:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.get(url, params=params, headers=headers)
-                resp.raise_for_status()
-                # EPO OPS may return JSON or XML depending on Accept header support
-                content_type = resp.headers.get("content-type", "")
-                if "json" in content_type:
-                    return self._parse_json_response(resp.json())
-                else:
-                    return self._parse_xml_response(resp.text)
+            resp = await self._client.get(url, params=params, headers=headers)
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "")
+            if "json" in content_type:
+                return self._parse_json_response(resp.json())
+            else:
+                return self._parse_xml_response(resp.text)
         except httpx.HTTPStatusError as exc:
             log.warning(
                 "EPO OPS search HTTP error %s: %s",
@@ -421,14 +420,13 @@ class EpoOpsSearchBackend:
         if direction == "backward":
             url = f"{self._base}/published-data/citation/epodoc/{patent_id}"
             try:
-                async with httpx.AsyncClient(timeout=30) as client:
-                    resp = await client.get(url, headers=headers)
-                    resp.raise_for_status()
-                    content_type = resp.headers.get("content-type", "")
-                    if "json" in content_type:
-                        return self._extract_ids_from_json(resp.json())
-                    else:
-                        return self._extract_ids_from_citation_xml(resp.text)
+                resp = await self._client.get(url, headers=headers)
+                resp.raise_for_status()
+                content_type = resp.headers.get("content-type", "")
+                if "json" in content_type:
+                    return self._extract_ids_from_json(resp.json())
+                else:
+                    return self._extract_ids_from_citation_xml(resp.text)
             except Exception as exc:
                 log.warning("EPO OPS citation fetch failed for %s: %s", patent_id, exc)
                 return []
@@ -456,14 +454,13 @@ class EpoOpsSearchBackend:
 
         url = f"{self._base}/family/publication/epodoc/{patent_id}"
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.get(url, headers=headers)
-                resp.raise_for_status()
-                content_type = resp.headers.get("content-type", "")
-                if "json" in content_type:
-                    return self._parse_family_json(resp.json())
-                else:
-                    return self._parse_family_xml(resp.text)
+            resp = await self._client.get(url, headers=headers)
+            resp.raise_for_status()
+            content_type = resp.headers.get("content-type", "")
+            if "json" in content_type:
+                return self._parse_family_json(resp.json())
+            else:
+                return self._parse_family_xml(resp.text)
         except Exception as exc:
             log.warning("EPO OPS family fetch failed for %s: %s", patent_id, exc)
             return []

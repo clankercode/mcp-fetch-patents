@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -250,18 +250,46 @@ impl PatentCache {
         self.local_dir.join(canonical_id)
     }
 
-    /// Look up a patent in the local cache. Returns None on miss or stale.
     pub fn lookup(&self, canonical_id: &str) -> Result<Option<CacheResult>> {
+        let results = self.lookup_batch(&[canonical_id])?;
+        Ok(results.into_iter().next().unwrap_or(None))
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn lookup_batch(&self, ids: &[&str]) -> Result<Vec<Option<CacheResult>>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
         let conn = self.connect()?;
 
-        let row = {
-            let mut stmt = conn.prepare(
-                "SELECT canonical_id, jurisdiction, doc_type, title, abstract, inventors,
-                        assignee, filing_date, publication_date, grant_date, fetched_at,
-                        legal_status, status_fetched_at, cache_dir
-                 FROM patents WHERE canonical_id = ?1",
-            )?;
-            stmt.query_row(params![canonical_id], |row| {
+        let placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
+        let sql = format!(
+            "SELECT canonical_id, jurisdiction, doc_type, title, abstract, inventors,
+                    assignee, filing_date, publication_date, grant_date, fetched_at,
+                    legal_status, status_fetched_at, cache_dir
+             FROM patents WHERE canonical_id IN ({})",
+            placeholders.join(",")
+        );
+        let params_vec: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows: Vec<(
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+        )> = stmt
+            .query_map(params_vec.as_slice(), |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
@@ -278,80 +306,127 @@ impl PatentCache {
                     row.get::<_, Option<String>>(12)?,
                     row.get::<_, String>(13)?,
                 ))
-            })
-            .optional()?
-        };
-
-        let (
-            cid,
-            jur,
-            doc_type,
-            title,
-            abs,
-            inventors_json,
-            assignee,
-            filing,
-            pub_date,
-            grant,
-            fetched_at,
-            legal_status,
-            _status_fetched_at,
-            cache_dir,
-        ) = match row {
-            None => return Ok(None),
-            Some(r) => r,
-        };
-
-        let inventors: Vec<String> = inventors_json
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or_default();
-
-        // Get file locations
-        let mut stmt =
-            conn.prepare("SELECT format, path FROM patent_locations WHERE patent_id = ?1")?;
-        let loc_rows: Vec<(String, String)> = stmt
-            .query_map(params![canonical_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
             })?
             .collect::<rusqlite::Result<_>>()?;
 
-        let mut files: HashMap<String, PathBuf> = HashMap::new();
-        for (fmt, path) in &loc_rows {
-            let p = PathBuf::from(path);
-            if p.exists() {
-                files.insert(fmt.clone(), p);
+        let mut by_id: HashMap<
+            String,
+            (
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                String,
+                Option<String>,
+                Option<String>,
+                String,
+            ),
+        > = HashMap::with_capacity(rows.len());
+        for row in rows {
+            by_id.insert(row.0.clone(), row);
+        }
+
+        let loc_placeholders: Vec<&str> = ids.iter().map(|_| "?").collect();
+        let loc_sql = format!(
+            "SELECT patent_id, format, path FROM patent_locations WHERE patent_id IN ({})",
+            loc_placeholders.join(",")
+        );
+        let mut loc_stmt = conn.prepare(&loc_sql)?;
+        let loc_params: Vec<&dyn rusqlite::ToSql> =
+            ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        let loc_rows: Vec<(String, String, String)> = loc_stmt
+            .query_map(loc_params.as_slice(), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+
+        let mut locs_by_id: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for (pid, fmt, path) in &loc_rows {
+            locs_by_id
+                .entry(pid.clone())
+                .or_default()
+                .push((fmt.clone(), path.clone()));
+        }
+
+        let mut results: Vec<Option<CacheResult>> = Vec::with_capacity(ids.len());
+        for id in ids {
+            match by_id.get(*id) {
+                None => results.push(None),
+                Some(row) => {
+                    let (
+                        cid,
+                        jur,
+                        doc_type,
+                        title,
+                        abs,
+                        inventors_json,
+                        assignee,
+                        filing,
+                        pub_date,
+                        grant,
+                        fetched_at,
+                        legal_status,
+                        _status_fetched_at,
+                        cache_dir,
+                    ) = row;
+
+                    let inventors: Vec<String> = inventors_json
+                        .as_deref()
+                        .and_then(|s| serde_json::from_str(s).ok())
+                        .unwrap_or_default();
+
+                    let loc_rows_for = locs_by_id.get(*id).cloned().unwrap_or_default();
+                    let mut files: HashMap<String, PathBuf> = HashMap::new();
+                    for (fmt, path) in &loc_rows_for {
+                        let p = PathBuf::from(path);
+                        if p.exists() {
+                            files.insert(fmt.clone(), p);
+                        }
+                    }
+
+                    if !loc_rows_for.is_empty() && files.is_empty() {
+                        results.push(None);
+                        continue;
+                    }
+
+                    let is_complete = files.len() == loc_rows_for.len();
+                    let metadata = PatentMetadata {
+                        canonical_id: cid.clone(),
+                        jurisdiction: jur.clone(),
+                        doc_type: doc_type.clone(),
+                        title: title.clone(),
+                        abstract_text: abs.clone(),
+                        inventors,
+                        assignee: assignee.clone(),
+                        filing_date: filing.clone(),
+                        publication_date: pub_date.clone(),
+                        grant_date: grant.clone(),
+                        fetched_at: fetched_at.clone(),
+                        legal_status: legal_status.clone(),
+                    };
+
+                    results.push(Some(CacheResult {
+                        canonical_id: id.to_string(),
+                        cache_dir: PathBuf::from(cache_dir),
+                        files,
+                        metadata: Some(metadata),
+                        is_complete,
+                    }));
+                }
             }
         }
 
-        // Stale check: no files at all
-        if !loc_rows.is_empty() && files.is_empty() {
-            return Ok(None);
-        }
-
-        let is_complete = files.len() == loc_rows.len();
-        let metadata = PatentMetadata {
-            canonical_id: cid,
-            jurisdiction: jur,
-            doc_type,
-            title,
-            abstract_text: abs,
-            inventors,
-            assignee,
-            filing_date: filing,
-            publication_date: pub_date,
-            grant_date: grant,
-            fetched_at,
-            legal_status,
-        };
-
-        Ok(Some(CacheResult {
-            canonical_id: canonical_id.to_string(),
-            cache_dir: PathBuf::from(cache_dir),
-            files,
-            metadata: Some(metadata),
-            is_complete,
-        }))
+        Ok(results)
     }
 
     /// Store patent artifacts and metadata in the local cache.
@@ -407,56 +482,70 @@ impl PatentCache {
             }
         }
 
-        // Persist to DB in one transaction
         let conn = self.connect()?;
-        conn.execute(
-            "INSERT OR REPLACE INTO patents
-             (canonical_id, jurisdiction, doc_type, title, abstract, inventors,
-              assignee, filing_date, publication_date, grant_date, fetched_at,
-              legal_status, status_fetched_at, cache_dir)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
-            params![
-                metadata.canonical_id,
-                metadata.jurisdiction,
-                metadata.doc_type,
-                metadata.title,
-                metadata.abstract_text,
-                serde_json::to_string(&metadata.inventors).unwrap_or_else(|_| "[]".into()),
-                metadata.assignee,
-                metadata.filing_date,
-                metadata.publication_date,
-                metadata.grant_date,
-                metadata.fetched_at,
-                metadata.legal_status,
-                Option::<String>::None, // status_fetched_at
-                dest_dir.to_string_lossy().as_ref(),
-            ],
-        )?;
+        conn.execute_batch("BEGIN TRANSACTION")?;
 
-        conn.execute(
-            "DELETE FROM patent_locations WHERE patent_id = ?1",
-            params![canonical_id],
-        )?;
-
-        for (fmt, path) in &file_entries {
+        let db_result: Result<()> = (|| {
             conn.execute(
-                "INSERT INTO patent_locations(patent_id, format, path) VALUES (?1,?2,?3)",
-                params![canonical_id, fmt, path.to_string_lossy().as_ref()],
+                "INSERT OR REPLACE INTO patents
+                 (canonical_id, jurisdiction, doc_type, title, abstract, inventors,
+                  assignee, filing_date, publication_date, grant_date, fetched_at,
+                  legal_status, status_fetched_at, cache_dir)
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+                params![
+                    metadata.canonical_id,
+                    metadata.jurisdiction,
+                    metadata.doc_type,
+                    metadata.title,
+                    metadata.abstract_text,
+                    serde_json::to_string(&metadata.inventors).unwrap_or_else(|_| "[]".into()),
+                    metadata.assignee,
+                    metadata.filing_date,
+                    metadata.publication_date,
+                    metadata.grant_date,
+                    metadata.fetched_at,
+                    metadata.legal_status,
+                    Option::<String>::None,
+                    dest_dir.to_string_lossy().as_ref(),
+                ],
             )?;
-        }
 
-        if let Some(sources) = fetch_sources {
-            let now = Utc::now().to_rfc3339();
-            for s in sources {
+            conn.execute(
+                "DELETE FROM patent_locations WHERE patent_id = ?1",
+                params![canonical_id],
+            )?;
+
+            for (fmt, path) in &file_entries {
                 conn.execute(
-                    "INSERT INTO fetch_sources(patent_id, source, success, elapsed_ms, error, fetched_at)
-                     VALUES (?1,?2,?3,?4,?5,?6)",
-                    params![canonical_id, s.source, s.success as i32, s.elapsed_ms, s.error, now],
+                    "INSERT INTO patent_locations(patent_id, format, path) VALUES (?1,?2,?3)",
+                    params![canonical_id, fmt, path.to_string_lossy().as_ref()],
                 )?;
             }
-        }
 
-        Ok(())
+            if let Some(sources) = fetch_sources {
+                let now = Utc::now().to_rfc3339();
+                for s in sources {
+                    conn.execute(
+                        "INSERT INTO fetch_sources(patent_id, source, success, elapsed_ms, error, fetched_at)
+                         VALUES (?1,?2,?3,?4,?5,?6)",
+                        params![canonical_id, s.source, s.success as i32, s.elapsed_ms, s.error, now],
+                    )?;
+                }
+            }
+
+            Ok(())
+        })();
+
+        match db_result {
+            Ok(()) => {
+                conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
     }
 
     /// List all patents in the local cache.

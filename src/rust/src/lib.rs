@@ -13,3 +13,7 @@ pub mod planner;
 pub mod ranking;
 pub mod search;
 pub mod server;
+
+pub fn now_iso() -> String {
+    chrono::Utc::now().to_rfc3339()
+}

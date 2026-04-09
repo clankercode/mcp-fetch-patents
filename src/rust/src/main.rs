@@ -4,7 +4,10 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser, Debug)]
-#[command(name = "patent-mcp-server", about = "MCP server for fetching and caching patents by ID")]
+#[command(
+    name = "patent-mcp-server",
+    about = "MCP server for fetching and caching patents by ID"
+)]
 struct Args {
     /// Local cache directory (default: ~/.local/share/patent-cache/patents)
     #[arg(long)]
@@ -46,7 +49,9 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Configure tracing to stderr (stdout is MCP JSON-RPC transport)
-    let filter = args.log_level.parse::<tracing_subscriber::filter::LevelFilter>()
+    let filter = args
+        .log_level
+        .parse::<tracing_subscriber::filter::LevelFilter>()
         .unwrap_or(tracing_subscriber::filter::LevelFilter::INFO);
     tracing_subscriber::fmt()
         .with_max_level(filter)
@@ -64,7 +69,10 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string(&result)?);
             Ok(())
         }
-        Some(Command::Plan { description, date_cutoff }) => {
+        Some(Command::Plan {
+            description,
+            date_cutoff,
+        }) => {
             let planner = patent_mcp::planner::NaturalLanguagePlanner;
             let intent = planner.plan(&description, date_cutoff.as_deref(), None);
             println!("{}", serde_json::to_string(&intent)?);
@@ -89,10 +97,12 @@ async fn main() -> Result<()> {
                     hits_by_query.insert(query.clone(), hits);
                 }
             }
-            let concepts: Vec<String> = data.get("concepts")
+            let concepts: Vec<String> = data
+                .get("concepts")
                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                 .unwrap_or_default();
-            let date_cutoff: Option<String> = data.get("date_cutoff")
+            let date_cutoff: Option<String> = data
+                .get("date_cutoff")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
 

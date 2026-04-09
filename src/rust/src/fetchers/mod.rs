@@ -113,14 +113,15 @@ pub struct OrchestratorResult {
 /// Coordinates patent fetching across all sources with caching.
 pub struct FetcherOrchestrator {
     config: PatentConfig,
-    cache: PatentCache,
+    cache: Arc<PatentCache>,
     sources: Vec<Box<dyn PatentSource>>,
     client: Arc<Client>,
     session_cache: Arc<SessionCache>,
+    converter_pipeline: ConverterPipeline,
 }
 
 impl FetcherOrchestrator {
-    pub fn new(config: PatentConfig, cache: PatentCache) -> Self {
+    pub fn new(config: PatentConfig, cache: Arc<PatentCache>) -> Self {
         let session_cache = Arc::new(SessionCache::new());
         let client = Arc::new(
             Client::builder()
@@ -130,6 +131,10 @@ impl FetcherOrchestrator {
                 .build()
                 .unwrap_or_else(|_| Client::new()),
         );
+        let converter_pipeline = ConverterPipeline::new(
+            config.converters_order.clone(),
+            config.converters_disabled.clone(),
+        );
         let sources = Self::build_sources(&config, session_cache.clone(), client.clone());
         FetcherOrchestrator {
             config,
@@ -137,6 +142,7 @@ impl FetcherOrchestrator {
             sources,
             client,
             session_cache,
+            converter_pipeline,
         }
     }
 
@@ -149,8 +155,8 @@ impl FetcherOrchestrator {
         session_cache: Arc<SessionCache>,
         client: Arc<Client>,
     ) -> Vec<Box<dyn PatentSource>> {
-        use crate::fetchers::http::*;
         use crate::fetchers::browser::BrowserSource;
+        use crate::fetchers::http::*;
 
         let mut all_sources: Vec<(&str, Box<dyn PatentSource>)> = vec![
             (
@@ -168,21 +174,36 @@ impl FetcherOrchestrator {
                 }),
             ),
             ("BigQuery", Box::new(BigQuerySource)),
-            ("Espacenet", Box::new(EspacenetSource {
-                client: client.clone(),
-            })),
-            ("WIPO_Scrape", Box::new(WipoScrapeSource {
-                client: client.clone(),
-            })),
-            ("IP_Australia", Box::new(IpAustraliaSource {
-                client: client.clone(),
-            })),
-            ("CIPO", Box::new(CipoScrapeSource {
-                client: client.clone(),
-            })),
-            ("Google_Patents", Box::new(BrowserSource {
-                client: client.clone(),
-            })),
+            (
+                "Espacenet",
+                Box::new(EspacenetSource {
+                    client: client.clone(),
+                }),
+            ),
+            (
+                "WIPO_Scrape",
+                Box::new(WipoScrapeSource {
+                    client: client.clone(),
+                }),
+            ),
+            (
+                "IP_Australia",
+                Box::new(IpAustraliaSource {
+                    client: client.clone(),
+                }),
+            ),
+            (
+                "CIPO",
+                Box::new(CipoScrapeSource {
+                    client: client.clone(),
+                }),
+            ),
+            (
+                "Google_Patents",
+                Box::new(BrowserSource {
+                    client: client.clone(),
+                }),
+            ),
         ];
 
         // Order by config.source_priority
@@ -215,11 +236,7 @@ impl FetcherOrchestrator {
     }
 
     /// Fetch a single patent, using cache if available.
-    pub async fn fetch(
-        &self,
-        patent: &CanonicalPatentId,
-        output_dir: &Path,
-    ) -> OrchestratorResult {
+    pub async fn fetch(&self, patent: &CanonicalPatentId, output_dir: &Path) -> OrchestratorResult {
         self.fetch_internal(patent, output_dir, false).await
     }
 
@@ -290,8 +307,13 @@ impl FetcherOrchestrator {
                 "All structured sources failed for {}, trying web search fallback",
                 patent.canonical
             );
-            let ws_result =
-                web_search::WebSearchFallbackSource::fetch(patent, output_dir, &self.config, self.client.clone()).await;
+            let ws_result = web_search::WebSearchFallbackSource::fetch(
+                patent,
+                output_dir,
+                &self.config,
+                self.client.clone(),
+            )
+            .await;
             all_attempts.push(ws_result.source_attempt.clone());
             if ws_result.source_attempt.success {
                 if let Some(p) = ws_result.pdf_path {
@@ -307,14 +329,10 @@ impl FetcherOrchestrator {
         // Convert PDF to markdown if we got a PDF
         let mut md_path: Option<PathBuf> = None;
         if let Some(pdf) = all_pdfs.first().cloned() {
-            let pipeline = ConverterPipeline::new(
-                self.config.converters_order.clone(),
-                self.config.converters_disabled.clone(),
-            );
+            let pipeline = self.converter_pipeline.clone();
             let md_out = output_dir.join(format!("{}.md", patent.canonical));
-            let result = tokio::task::spawn_blocking(move || {
-                pipeline.pdf_to_markdown(&pdf, &md_out)
-            }).await;
+            let result =
+                tokio::task::spawn_blocking(move || pipeline.pdf_to_markdown(&pdf, &md_out)).await;
             if let Ok(Ok(cr)) = result {
                 if cr.success {
                     md_path = cr.output_path;
@@ -506,7 +524,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let cfg = make_config(&tmp);
         let cache = PatentCache::new(&cfg).unwrap();
-        let orch = FetcherOrchestrator::new(cfg, cache);
+        let orch = FetcherOrchestrator::new(cfg, Arc::new(cache));
         // Should have built sources
         assert!(!orch.sources.is_empty());
     }
@@ -516,7 +534,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let cfg = make_config(&tmp);
         let cache = PatentCache::new(&cfg).unwrap();
-        let orch = FetcherOrchestrator::new(cfg, cache);
+        let orch = FetcherOrchestrator::new(cfg, Arc::new(cache));
         let patent = crate::id_canon::canonicalize("US7654321");
         let sources = orch.get_sources_for(&patent);
         let names: Vec<&str> = sources.iter().map(|s| s.source_name()).collect();
@@ -529,7 +547,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let cfg = make_config(&tmp);
         let cache = PatentCache::new(&cfg).unwrap();
-        let orch = FetcherOrchestrator::new(cfg, cache);
+        let orch = FetcherOrchestrator::new(cfg, Arc::new(cache));
         let patent = crate::id_canon::canonicalize("WO2024123456");
         let sources = orch.get_sources_for(&patent);
         let names: Vec<&str> = sources.iter().map(|s| s.source_name()).collect();
@@ -542,7 +560,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let cfg = make_config(&tmp);
         let cache = PatentCache::new(&cfg).unwrap();
-        let orch = FetcherOrchestrator::new(cfg, cache);
+        let orch = FetcherOrchestrator::new(cfg, Arc::new(cache));
         let patent = crate::id_canon::canonicalize("AU2023123456");
         let sources = orch.get_sources_for(&patent);
         let names: Vec<&str> = sources.iter().map(|s| s.source_name()).collect();
@@ -556,7 +574,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let cfg = make_config(&tmp);
         let cache = PatentCache::new(&cfg).unwrap();
-        let orch = FetcherOrchestrator::new(cfg, cache);
+        let orch = FetcherOrchestrator::new(cfg, Arc::new(cache));
         let patent = crate::id_canon::canonicalize("CA3012345");
         let sources = orch.get_sources_for(&patent);
         let names: Vec<&str> = sources.iter().map(|s| s.source_name()).collect();
@@ -576,7 +594,7 @@ mod tests {
             "web_search".into(),
         ];
         let cache = PatentCache::new(&cfg).unwrap();
-        let orch = FetcherOrchestrator::new(cfg, cache);
+        let orch = FetcherOrchestrator::new(cfg, Arc::new(cache));
         let patent = crate::id_canon::canonicalize("US7654321");
         let sources = orch.get_sources_for(&patent);
         let names: Vec<&str> = sources.iter().map(|s| s.source_name()).collect();
@@ -618,11 +636,9 @@ mod tests {
             md: None,
             images: vec![],
         };
-        cache
-            .store("US7654321", &artifacts, &meta, None)
-            .unwrap();
+        cache.store("US7654321", &artifacts, &meta, None).unwrap();
 
-        let orch = FetcherOrchestrator::new(cfg, cache);
+        let orch = FetcherOrchestrator::new(cfg, Arc::new(cache));
         let patent = crate::id_canon::canonicalize("US7654321");
         let result = orch.fetch(&patent, tmp.path()).await;
         assert!(result.from_cache);
@@ -635,7 +651,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let cfg = make_config(&tmp);
         let cache = PatentCache::new(&cfg).unwrap();
-        let orch = FetcherOrchestrator::new(cfg, cache);
+        let orch = FetcherOrchestrator::new(cfg, Arc::new(cache));
         let names: Vec<&str> = orch.sources.iter().map(|s| s.source_name()).collect();
         assert!(
             !names.contains(&"web_search"),
@@ -703,7 +719,7 @@ mod tests {
 
         let orch = FetcherOrchestrator {
             config: cfg,
-            cache,
+            cache: Arc::new(cache),
             client: Arc::new(Client::new()),
             sources: vec![
                 Box::new(StubSource {
@@ -718,6 +734,7 @@ mod tests {
                 }),
             ],
             session_cache: Arc::new(SessionCache::new()),
+            converter_pipeline: ConverterPipeline::new(vec![], vec![]),
         };
 
         let patent = crate::id_canon::canonicalize("US7654321");
@@ -747,16 +764,20 @@ mod tests {
 
         let orch = FetcherOrchestrator {
             config: cfg,
-            cache,
+            cache: Arc::new(cache),
             client: Arc::new(Client::new()),
             sources: vec![],
             session_cache: Arc::new(SessionCache::new()),
+            converter_pipeline: ConverterPipeline::new(vec![], vec![]),
         };
 
         let patent = crate::id_canon::canonicalize("US10000000");
         let result = orch.fetch_force_refresh(&patent, tmp.path()).await;
 
         assert!(result.success);
-        assert!(result.sources.iter().any(|source| source.source == "web_search" && source.success));
+        assert!(result
+            .sources
+            .iter()
+            .any(|source| source.source == "web_search" && source.success));
     }
 }

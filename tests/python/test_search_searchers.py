@@ -3,15 +3,17 @@
 All tests mock HTTP calls with respx to avoid real network traffic.
 Marked 'slow': httpx+respx imports add ~250ms; excluded from <1s fast suite.
 """
+
 from __future__ import annotations
 
 import json
 import xml.etree.ElementTree as ET
 from typing import Any
 
-import httpx
 import pytest
-import respx
+
+httpx = pytest.importorskip("httpx")
+respx = pytest.importorskip("respx")
 
 pytestmark = pytest.mark.slow
 
@@ -55,6 +57,7 @@ def _epo_backend(
 # ---------------------------------------------------------------------------
 # SerpAPI — success
 # ---------------------------------------------------------------------------
+
 
 class TestSerpApiSuccess:
     @pytest.mark.asyncio
@@ -137,9 +140,7 @@ class TestSerpApiSuccess:
     async def test_result_without_patent_id_is_skipped(self):
         backend = _serpapi_backend()
         response_data = {
-            "organic_results": [
-                {"title": "No ID patent", "snippet": "stub"}
-            ]
+            "organic_results": [{"title": "No ID patent", "snippet": "stub"}]
         }
 
         with respx.mock:
@@ -163,7 +164,9 @@ class TestSerpApiSuccess:
 
         with respx.mock:
             respx.get(SERP_MOCK_BASE).mock(side_effect=capture)
-            await backend.search("wireless", date_from="2020-01-01", date_to="2023-12-31")
+            await backend.search(
+                "wireless", date_from="2020-01-01", date_to="2023-12-31"
+            )
 
         assert captured_params.get("after_priority_date") == "2020/01/01"
         assert captured_params.get("before_priority_date") == "2023/12/31"
@@ -195,6 +198,7 @@ class TestSerpApiSuccess:
 # SerpAPI — error handling
 # ---------------------------------------------------------------------------
 
+
 class TestSerpApiErrors:
     @pytest.mark.asyncio
     async def test_http_error_returns_empty_list(self):
@@ -225,7 +229,9 @@ class TestSerpApiErrors:
         backend = _serpapi_backend()
 
         with respx.mock:
-            respx.get(SERP_MOCK_BASE).mock(side_effect=httpx.ConnectError("unreachable"))
+            respx.get(SERP_MOCK_BASE).mock(
+                side_effect=httpx.ConnectError("unreachable")
+            )
             hits = await backend.search("wireless")
 
         assert hits == []
@@ -253,6 +259,7 @@ class TestSerpApiErrors:
 # ---------------------------------------------------------------------------
 # USPTO PPUBS — success
 # ---------------------------------------------------------------------------
+
 
 class TestUsptoSuccess:
     @pytest.mark.asyncio
@@ -344,9 +351,7 @@ class TestUsptoSuccess:
         """Backend should also accept 'results' key in response."""
         backend = _ppubs_backend()
         response_data = {
-            "results": [
-                {"patentNumber": "US20220100001", "title": "Pub Patent"}
-            ]
+            "results": [{"patentNumber": "US20220100001", "title": "Pub Patent"}]
         }
 
         with respx.mock:
@@ -362,6 +367,7 @@ class TestUsptoSuccess:
 # ---------------------------------------------------------------------------
 # USPTO PPUBS — error handling
 # ---------------------------------------------------------------------------
+
 
 class TestUsptoErrors:
     @pytest.mark.asyncio
@@ -405,6 +411,7 @@ class TestUsptoErrors:
 # EPO OPS — classification search builds correct CQL
 # ---------------------------------------------------------------------------
 
+
 class TestEpoClassificationSearch:
     @pytest.mark.asyncio
     async def test_classification_search_wildcard_cql(self):
@@ -417,7 +424,9 @@ class TestEpoClassificationSearch:
             return httpx.Response(200, json={})
 
         with respx.mock:
-            respx.get(f"{EPO_MOCK_BASE}/published-data/search").mock(side_effect=capture)
+            respx.get(f"{EPO_MOCK_BASE}/published-data/search").mock(
+                side_effect=capture
+            )
             await backend.search_by_classification("H02J50", include_subclasses=True)
 
         assert "cpc=H02J50/*" in captured_params.get("q", "")
@@ -433,8 +442,12 @@ class TestEpoClassificationSearch:
             return httpx.Response(200, json={})
 
         with respx.mock:
-            respx.get(f"{EPO_MOCK_BASE}/published-data/search").mock(side_effect=capture)
-            await backend.search_by_classification("H02J50/10", include_subclasses=False)
+            respx.get(f"{EPO_MOCK_BASE}/published-data/search").mock(
+                side_effect=capture
+            )
+            await backend.search_by_classification(
+                "H02J50/10", include_subclasses=False
+            )
 
         assert "cpc=H02J50/10" in captured_params.get("q", "")
 
@@ -449,7 +462,9 @@ class TestEpoClassificationSearch:
             return httpx.Response(200, json={})
 
         with respx.mock:
-            respx.get(f"{EPO_MOCK_BASE}/published-data/search").mock(side_effect=capture)
+            respx.get(f"{EPO_MOCK_BASE}/published-data/search").mock(
+                side_effect=capture
+            )
             await backend.search_by_classification(
                 "H02J50",
                 include_subclasses=True,
@@ -472,7 +487,9 @@ class TestEpoClassificationSearch:
             return httpx.Response(200, json={})
 
         with respx.mock:
-            respx.get(f"{EPO_MOCK_BASE}/published-data/search").mock(side_effect=capture)
+            respx.get(f"{EPO_MOCK_BASE}/published-data/search").mock(
+                side_effect=capture
+            )
             await backend.search_by_classification("H04W", max_results=10)
 
         assert captured_params.get("Range") == "1-10"
@@ -481,6 +498,7 @@ class TestEpoClassificationSearch:
 # ---------------------------------------------------------------------------
 # EPO OPS — no credentials → graceful degradation
 # ---------------------------------------------------------------------------
+
 
 class TestEpoNoCreds:
     @pytest.mark.asyncio
@@ -688,6 +706,7 @@ class TestEpoXmlParsing:
 # EPO OPS — get_citations
 # ---------------------------------------------------------------------------
 
+
 class TestEpoCitations:
     @pytest.mark.asyncio
     async def test_backward_citation_request_url(self):
@@ -717,7 +736,9 @@ class TestEpoCitations:
             return httpx.Response(200, json={})
 
         with respx.mock:
-            respx.get(f"{EPO_MOCK_BASE}/published-data/search").mock(side_effect=capture)
+            respx.get(f"{EPO_MOCK_BASE}/published-data/search").mock(
+                side_effect=capture
+            )
             ids = await backend.get_citations("EP9876543B1", direction="forward")
 
         assert "ct=EP9876543B1" in captured_params.get("q", "")
@@ -739,6 +760,7 @@ class TestEpoCitations:
 # ---------------------------------------------------------------------------
 # EPO OPS — get_family
 # ---------------------------------------------------------------------------
+
 
 class TestEpoFamily:
     @pytest.mark.asyncio
@@ -785,6 +807,7 @@ class TestEpoFamily:
 # ---------------------------------------------------------------------------
 # PatentHit dataclass
 # ---------------------------------------------------------------------------
+
 
 class TestPatentHitDataclass:
     def test_required_field_only(self):

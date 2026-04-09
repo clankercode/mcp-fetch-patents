@@ -30,10 +30,7 @@ const HIGH_CONFIDENCE_DOMAINS: &[&str] = &[
     "freepatentsonline.com",
 ];
 
-const MEDIUM_CONFIDENCE_DOMAINS: &[&str] = &[
-    "patentyogi.com",
-    "patent.ifixit.com",
-];
+const MEDIUM_CONFIDENCE_DOMAINS: &[&str] = &["patentyogi.com", "patent.ifixit.com"];
 
 // ---------------------------------------------------------------------------
 // Query generation
@@ -175,10 +172,8 @@ impl DuckDuckGoBackend {
                     // Extract from "Results" array
                     if let Some(results) = data.get("Results").and_then(|r| r.as_array()) {
                         for r in results {
-                            if let Some(url) = r
-                                .get("FirstURL")
-                                .or(r.get("url"))
-                                .and_then(|u| u.as_str())
+                            if let Some(url) =
+                                r.get("FirstURL").or(r.get("url")).and_then(|u| u.as_str())
                             {
                                 urls.push(url.to_string());
                             }
@@ -361,9 +356,7 @@ mod tests {
         let patent = crate::id_canon::canonicalize("EP1234567");
         let queries = generate_queries(&patent);
         assert!(queries[0].contains("EP1234567"));
-        assert!(queries
-            .iter()
-            .any(|q| q.contains("European Patent Office")));
+        assert!(queries.iter().any(|q| q.contains("European Patent Office")));
         assert!(queries.iter().any(|q| q.contains("site:epo.org")));
     }
 
@@ -391,17 +384,11 @@ mod tests {
     #[test]
     fn test_score_url_confidence_high_domain() {
         assert_eq!(
-            score_url_confidence(
-                "https://patents.google.com/patent/US7654321",
-                "US7654321"
-            ),
+            score_url_confidence("https://patents.google.com/patent/US7654321", "US7654321"),
             "high"
         );
         assert_eq!(
-            score_url_confidence(
-                "https://ppubs.uspto.gov/patent/US7654321",
-                "US7654321"
-            ),
+            score_url_confidence("https://ppubs.uspto.gov/patent/US7654321", "US7654321"),
             "high"
         );
     }
@@ -437,13 +424,25 @@ mod tests {
 
     #[test]
     fn test_extract_domain_simple() {
-        assert_eq!(extract_domain("https://patents.google.com/patent/US123"), "patents.google.com");
-        assert_eq!(extract_domain("https://www.example.com/page"), "example.com");
-        assert_eq!(extract_domain("http://patentyogi.com/article"), "patentyogi.com");
+        assert_eq!(
+            extract_domain("https://patents.google.com/patent/US123"),
+            "patents.google.com"
+        );
+        assert_eq!(
+            extract_domain("https://www.example.com/page"),
+            "example.com"
+        );
+        assert_eq!(
+            extract_domain("http://patentyogi.com/article"),
+            "patentyogi.com"
+        );
     }
 
     #[test]
     fn test_extract_domain_with_port() {
-        assert_eq!(extract_domain("https://example.com:8080/page"), "example.com");
+        assert_eq!(
+            extract_domain("https://example.com:8080/page"),
+            "example.com"
+        );
     }
 }

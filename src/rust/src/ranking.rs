@@ -41,6 +41,24 @@ fn default_relevance() -> String {
     "unknown".to_string()
 }
 
+impl PatentHit {
+    pub fn new(patent_id: String, source: impl Into<String>) -> Self {
+        Self {
+            patent_id,
+            title: None,
+            date: None,
+            assignee: None,
+            inventors: vec![],
+            abstract_text: None,
+            source: source.into(),
+            relevance: "unknown".to_string(),
+            note: String::new(),
+            prior_art: None,
+            url: None,
+        }
+    }
+}
+
 /// A [`PatentHit`] decorated with a computed relevance score.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ScoredHit {
