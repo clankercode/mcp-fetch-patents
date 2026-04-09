@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 #[derive(Parser, Debug)]
 #[command(name = "patent-mcp-server", about = "MCP server for fetching and caching patents by ID")]
 struct Args {
-    /// Local cache directory (default: .patents in current dir)
+    /// Local cache directory (default: ~/.local/share/patent-cache/patents)
     #[arg(long)]
     cache_dir: Option<String>,
 

@@ -8,7 +8,7 @@ This document defines end-to-end test cases for the patent-mcp-server Rust MCP s
 
 1. The patent-mcp-server binary is built and registered as an MCP server named `patent-tools` in your Claude CLI configuration (`.mcp.json`).
 2. The Claude CLI (`claude`) is installed and authenticated.
-3. For cache-empty tests (E2E-006), delete the `.patents/` directory before running.
+3. For cache-empty tests (E2E-006), delete the global cache directory before running.
 4. For cache-dependent tests (E2E-007, E2E-008, E2E-010), run E2E-001 first so that at least US7654321 is cached.
 
 ## How to Run
@@ -136,12 +136,12 @@ Replace `"PROMPT HERE"` with the prompt from the test case. Inspect the Claude o
   ```
   Use the list_cached_patents tool to list all cached patents. Return the full raw tool response.
   ```
-- **Expected Behavior**: With no `.patents/` directory or an empty one, the server returns an empty list.
+- **Expected Behavior**: With an empty cache, the server returns an empty list.
 - **Pass Criteria**:
   - Response contains a `patents` field that is an empty array (`[]`).
   - Response contains `count: 0`.
   - No error is returned.
-- **Notes**: Delete the `.patents/` directory before running this test: `rm -rf .patents/`.
+- **Notes**: Clear the global cache before running: `rm -rf ~/.local/share/patent-cache/`.
 
 ---
 
@@ -659,7 +659,7 @@ Replace `"PROMPT HERE"` with the prompt from the test case. Inspect the Claude o
 
 Run the tests in this order to satisfy cache prerequisites:
 
-1. **E2E-006** — List cache (empty). Run after deleting `.patents/`.
+1. **E2E-006** — List cache (empty). Run after clearing the global cache.
 2. **E2E-001** — Fetch US7654321 (populates cache).
 3. **E2E-007** — List cache (non-empty, confirms E2E-001 cached correctly).
 4. **E2E-008** — Get metadata for cached patent.

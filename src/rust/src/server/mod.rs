@@ -92,7 +92,7 @@ fn tools_list() -> Value {
             },
             {
                 "name": "list_cached_patents",
-                "description": "List all patents cached in the local .patents/ directory.",
+                "description": "List all cached patents.",
                 "inputSchema": {"type": "object", "properties": {}}
             },
             {
@@ -279,6 +279,7 @@ async fn execute_tool_call(
     config: &PatentConfig,
     cache: &crate::cache::PatentCache,
     orchestrator: &crate::fetchers::FetcherOrchestrator,
+    journal: &crate::journal::ActivityJournal,
 ) -> RpcResponse {
     let tool_name = match params.get("name").and_then(|v| v.as_str()) {
         Some(n) => n.to_string(),
@@ -308,6 +309,8 @@ async fn execute_tool_call(
             )
             .await;
 
+            journal.log_fetch(&patent_ids, &payload["summary"]);
+
             RpcResponse::ok(id, serde_json::json!({
                 "content": [{"type": "text", "text": payload.to_string()}]
             }))
@@ -321,6 +324,7 @@ async fn execute_tool_call(
                         "cache_dir": e.cache_dir.to_string_lossy()
                     })).collect();
                     let count = patents.len();
+                    journal.log_list(count);
                     let payload = serde_json::json!({"patents": patents, "count": count});
                     RpcResponse::ok(id, serde_json::json!({
                         "content": [{"type": "text", "text": payload.to_string()}]
@@ -361,6 +365,10 @@ async fn execute_tool_call(
                 }
             }
 
+            let found = results.iter().filter(|r| !r["metadata"].is_null()).count();
+            let missing = results.len() - found;
+            journal.log_metadata(&patent_ids, found, missing);
+
             let payload = serde_json::json!({"results": results});
             RpcResponse::ok(id, serde_json::json!({
                 "content": [{"type": "text", "text": payload.to_string()}]
@@ -379,6 +387,7 @@ async fn execute_tool_call(
 pub async fn run_server(config: PatentConfig) -> Result<()> {
     use crate::cache::PatentCache;
     use crate::fetchers::FetcherOrchestrator;
+    use crate::journal::ActivityJournal;
 
     // Two PatentCache instances sharing the same SQLite WAL database:
     // one owned by the orchestrator for fetch operations,
@@ -386,6 +395,7 @@ pub async fn run_server(config: PatentConfig) -> Result<()> {
     let cache_for_ops = PatentCache::new(&config)?;
     let cache_for_orch = PatentCache::new(&config)?;
     let orchestrator = FetcherOrchestrator::new(config.clone(), cache_for_orch);
+    let journal = ActivityJournal::new(config.activity_journal.clone());
 
     let stdout = std::io::stdout();
 
@@ -413,7 +423,7 @@ pub async fn run_server(config: PatentConfig) -> Result<()> {
         let response = match route_line(&line) {
             Dispatch::Immediate(r) => r,
             Dispatch::ToolCall { id, params } => {
-                execute_tool_call(id, params, &config, &cache_for_ops, &orchestrator).await
+                execute_tool_call(id, params, &config, &cache_for_ops, &orchestrator, &journal).await
             }
         };
 
@@ -479,7 +489,7 @@ mod tests {
 
     fn make_config() -> PatentConfig {
         PatentConfig {
-            cache_local_dir: std::path::PathBuf::from(".patents"),
+            cache_local_dir: crate::config::xdg_data_home().join("patent-cache").join("patents"),
             cache_global_db: crate::config::default_global_db(),
             source_priority: vec![],
             concurrency: 5,
@@ -494,6 +504,7 @@ mod tests {
             serpapi_key: None,
             bing_key: None,
             bigquery_project: None,
+            activity_journal: None,
         }
     }
 

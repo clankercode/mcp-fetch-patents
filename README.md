@@ -99,8 +99,8 @@ Fetch one or more patents by ID. Accepts any format — bare numbers, jurisdicti
       "success": true,
       "from_cache": false,
       "files": {
-        "pdf": ".patents/US7654321/US7654321.pdf",
-        "md": ".patents/US7654321/US7654321.md"
+        "pdf": "~/.local/share/patent-cache/patents/US7654321/US7654321.pdf",
+        "md": "~/.local/share/patent-cache/patents/US7654321/US7654321.md"
       },
       "metadata": {
         "title": "Method and apparatus for ...",
@@ -128,7 +128,7 @@ Fetch one or more patents by ID. Accepts any format — bare numbers, jurisdicti
 
 ### `list_cached_patents`
 
-List everything in the local `.patents/` cache. No parameters, returns `{patents: [...], count: N}`.
+List all cached patents. No parameters, returns `{patents: [...], count: N}`.
 
 ### `get_patent_metadata`
 
@@ -178,7 +178,9 @@ Agent                    MCP Server (Rust)
   │   files + metadata        │
 ```
 
-**Cache:** Two-layer SQLite — local `.patents/index.db` per project + global `~/.local/share/patent-cache/index.db` shared across all projects. Files live in `.patents/{CANONICAL_ID}/`. First fetch takes seconds. Every subsequent fetch is instant — even across different repos.
+**Cache:** Single global SQLite DB at `~/.local/share/patent-cache/index.db` shared across all projects. Patent files live in `~/.local/share/patent-cache/patents/{CANONICAL_ID}/`. First fetch takes seconds. Every subsequent fetch is instant — even across different repos.
+
+**Activity journal:** Each tool call is logged to `.patent-activity.jsonl` in the current working directory (JSONL format). This file is meant to be git-tracked so each project retains a record of what was searched, fetched, and accessed. Disable with `PATENT_ACTIVITY_JOURNAL=""`.
 
 **PDF → Markdown:** Four converter backends tried in order (pymupdf4llm → pdfplumber → pdftotext → marker). If one fails, the next picks up. Tables extracted and merged. OCR via tesseract for scanned patent figures. The output is clean enough for an LLM to read directly.
 
@@ -190,7 +192,7 @@ All config via autoloaded env files, `~/.patents.toml`, or environment variables
 
 | Env var | Default | Description |
 |---|---|---|
-| `PATENT_CACHE_DIR` | `.patents/` | Local cache directory |
+| `PATENT_CACHE_DIR` | `~/.local/share/patent-cache/patents` | Cache directory for patent files |
 | `PATENT_CONCURRENCY` | `5` | Max concurrent fetches |
 | `PATENT_TIMEOUT` | `30.0` | HTTP timeout (seconds) |
 | `PATENT_EPO_KEY` | — | EPO OPS `client_id:client_secret` |
@@ -198,6 +200,7 @@ All config via autoloaded env files, `~/.patents.toml`, or environment variables
 | `PATENT_SERPAPI_KEY` | — | SerpAPI key (web search fallback) |
 | `PATENT_BIGQUERY_PROJECT` | — | GCP project for BigQuery source |
 | `PATENT_FETCH_ALL_SOURCES` | `false` | Try all sources even after first success |
+| `PATENT_ACTIVITY_JOURNAL` | `.patent-activity.jsonl` | Per-repo activity journal (empty = disabled) |
 
 ## Development
 

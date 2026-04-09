@@ -35,7 +35,7 @@ def default_global_db() -> Path:
 
 
 def default_local_cache() -> Path:
-    return Path(".patents")
+    return xdg_data_home() / "patent-cache" / "patents"
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +88,9 @@ class PatentConfig:
 
     # Per-source base URL overrides (for testing)
     source_base_urls: dict[str, str] = field(default_factory=dict)
+
+    # Activity journal (None = disabled, relative to CWD by default)
+    activity_journal: Path | None = field(default_factory=lambda: Path(".patent-activity.jsonl"))
 
     # Misc test flags
     disable_marker: bool = True  # True = marker in converters_disabled
@@ -157,6 +160,14 @@ def _apply_toml(cfg: PatentConfig, data: dict[str, Any]) -> None:
     if "disable" in converters:
         cfg.converters_disabled = list(converters["disable"])
 
+    journal = data.get("journal", {})
+    if "path" in journal:
+        v = journal["path"]
+        if not v:
+            cfg.activity_journal = None
+        else:
+            cfg.activity_journal = Path(v)
+
     agent = data.get("agent", {})
     if "command" in agent:
         cfg.agent_command = agent["command"]
@@ -196,6 +207,12 @@ def _apply_env(cfg: PatentConfig, env: dict[str, str]) -> None:
         cfg.serpapi_key = v or None
     if v := env.get("PATENT_BING_KEY"):
         cfg.bing_key = v or None
+    if "PATENT_ACTIVITY_JOURNAL" in env:
+        v = env["PATENT_ACTIVITY_JOURNAL"]
+        if not v:
+            cfg.activity_journal = None
+        else:
+            cfg.activity_journal = Path(v)
     if v := env.get("PATENT_AGENT_CMD"):
         cfg.agent_command = v
     if v := env.get("PATENT_LOG_LEVEL"):

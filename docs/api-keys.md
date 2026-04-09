@@ -85,7 +85,7 @@ Create `~/.patents.toml` (or set `PATENT_CONFIG_FILE` to a custom path):
 
 ```toml
 [cache]
-local_dir = ".patents"        # Relative to working directory
+local_dir = "~/.local/share/patent-cache/patents"  # XDG default
 global_db = "~/.local/share/patent-cache/index.db"  # XDG default
 
 [sources]
@@ -130,7 +130,7 @@ GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PATENT_CACHE_DIR` | `.patents` | Local cache directory |
+| `PATENT_CACHE_DIR` | `~/.local/share/patent-cache/patents` | Cache directory for patent files |
 | `PATENT_GLOBAL_DB` | `~/.local/share/patent-cache/index.db` | Global SQLite index |
 | `PATENT_EPO_KEY` | — | EPO OPS credentials (`client_id:client_secret`) |
 | `PATENT_LENS_KEY` | — | Lens.org API key |
@@ -141,4 +141,5 @@ GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
 | `PATENT_FETCH_ALL_SOURCES` | `false` | Fan-out to all sources concurrently |
 | `PATENT_DISABLE_MARKER` | `false` | Disable marker PDF converter |
 | `PATENT_BIGQUERY_PROJECT` | — | GCP project for BigQuery |
+| `PATENT_ACTIVITY_JOURNAL` | `.patent-activity.jsonl` | Per-repo activity journal (empty = disabled) |
 | `GOOGLE_APPLICATION_CREDENTIALS` | — | Path to GCP service account JSON |

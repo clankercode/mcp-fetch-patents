@@ -1480,6 +1480,7 @@ mod tests {
             serpapi_key: None,
             bing_key: None,
             bigquery_project: None,
+            activity_journal: None,
         }
     }
 

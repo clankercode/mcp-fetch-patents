@@ -192,18 +192,26 @@ class SessionCache:
 # ---------------------------------------------------------------------------
 
 class PatentCache:
-    """On-disk per-repo cache + global SQLite index."""
+    """On-disk patent cache backed by a single global SQLite DB."""
 
     def __init__(self, config: PatentConfig) -> None:
         self._config = config
         self._local_dir = Path(config.cache_local_dir)
         self._global_db_path = Path(config.cache_global_db)
-        self._local_db_path = self._local_dir / "index.db"
-        self._init_db(self._local_db_path)
-        # Register this cache dir in the global index
         self._global_db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db(self._global_db_path)
-        with self._connect(self._global_db_path) as conn:
+
+        # Suggest migration if old .patents/index.db exists in CWD
+        old_local_db = Path(".patents") / "index.db"
+        if old_local_db.exists():
+            log.info(
+                "Found old .patents/index.db in CWD. Patent cache now uses %s. "
+                "The old .patents/ directory can be safely deleted.",
+                self._global_db_path,
+            )
+
+        # Register cache dir in global index
+        with self._connect() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO cache_registrations(cache_dir, registered_at) VALUES (?,?)",
                 (str(self._local_dir.resolve()), _now_utc()),
@@ -219,7 +227,7 @@ class PatentCache:
             conn.executescript(SCHEMA_SQL)
 
     def _connect(self, db_path: Path | None = None) -> sqlite3.Connection:
-        path = db_path or self._local_db_path
+        path = db_path or self._global_db_path
         conn = sqlite3.connect(str(path))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")

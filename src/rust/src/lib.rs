@@ -8,4 +8,5 @@ pub mod config;
 pub mod converters;
 pub mod fetchers;
 pub mod id_canon;
+pub mod journal;
 pub mod server;

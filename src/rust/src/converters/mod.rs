@@ -546,7 +546,7 @@ mod tests {
     #[test]
     fn test_check_available_tools_respects_disabled() {
         let config = PatentConfig {
-            cache_local_dir: PathBuf::from(".patents"),
+            cache_local_dir: PathBuf::from("/tmp/test-patents"),
             cache_global_db: PathBuf::from("/tmp/test_global.db"),
             source_priority: vec![],
             concurrency: 5,
@@ -571,6 +571,7 @@ mod tests {
             serpapi_key: None,
             bing_key: None,
             bigquery_project: None,
+            activity_journal: None,
         };
         let tools = check_available_tools(&config);
         for name in &config.converters_order {

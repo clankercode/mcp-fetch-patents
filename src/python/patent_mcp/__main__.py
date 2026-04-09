@@ -8,7 +8,7 @@ def main() -> None:
         prog="patent-mcp-server",
         description="MCP server for fetching and caching patents by ID",
     )
-    parser.add_argument("--cache-dir", default=None, help="Local cache directory (default: .patents/)")
+    parser.add_argument("--cache-dir", default=None, help="Local cache directory (default: ~/.local/share/patent-cache/patents)")
     parser.add_argument("--log-level", default="info", choices=["debug", "info", "warn", "error"])
 
     subparsers = parser.add_subparsers(dest="command")

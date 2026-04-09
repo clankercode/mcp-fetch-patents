@@ -43,21 +43,23 @@ def _extract_index_names(db_path: Path) -> set[str]:
 def python_cache_db(tmp_path_factory):
     """Initialize a Python cache DB and return its path."""
     d = tmp_path_factory.mktemp("py_cache")
-    cache_dir = d / ".patents"
+    cache_dir = d / "patents"
     cache_dir.mkdir()
+    global_db = d / "index.db"
 
     import sys
     import os
     src_python = str(Path(__file__).parent.parent.parent / "src" / "python")
     env = dict(os.environ, PYTHONPATH=src_python)
 
-    # Run Python to initialize the cache DB
+    # Run Python to initialize the cache DB (global DB path)
     code = (
         f"import sys; sys.path.insert(0, {repr(src_python)}); "
         f"from patent_mcp.config import load_config; "
         f"from patent_mcp.cache import PatentCache; "
         f"from pathlib import Path; "
-        f"cfg = load_config(overrides={{'cache_local_dir': Path({repr(str(cache_dir))})}}); "
+        f"cfg = load_config(overrides={{'cache_local_dir': Path({repr(str(cache_dir))}), "
+        f"'cache_global_db': Path({repr(str(global_db))})}}); "
         f"PatentCache(cfg)"
     )
     result = subprocess.run(
@@ -65,42 +67,34 @@ def python_cache_db(tmp_path_factory):
         capture_output=True, text=True, env=env
     )
     assert result.returncode == 0, f"Python cache init failed: {result.stderr}"
-    return cache_dir / "index.db"
+    return global_db
 
 
 @pytest.fixture(scope="module")
 def rust_cache_db(tmp_path_factory, rust_binary):
-    """Initialize a Rust cache DB by running a dummy canonicalize call."""
+    """Initialize a Rust cache DB by running the server briefly."""
     d = tmp_path_factory.mktemp("rs_cache")
-    cache_dir = d / ".patents"
+    cache_dir = d / "patents"
     cache_dir.mkdir()
+    global_db = d / "index.db"
 
-    # Run the Rust binary to just initialize the server config + cache
-    # Use the "canonicalize" subcommand (lightweight, no network) with --cache-dir
-    result = subprocess.run(
-        [rust_binary, "--cache-dir", str(cache_dir), "canonicalize", "US7654321"],
-        capture_output=True, text=True, timeout=10
-    )
-    assert result.returncode == 0, f"Rust canonicalize failed: {result.stderr}"
-
-    # Cache DB is created at cache_dir/index.db by PatentCache::new() in run_server,
-    # but canonicalize subcommand bypasses that. We need to init the cache directly.
-    # Run the server for just a split second to init the DB via initialize message.
     import json
+    import os
     init_msg = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+    env = dict(os.environ, PATENT_GLOBAL_DB=str(global_db))
     proc = subprocess.Popen(
         [rust_binary, "--cache-dir", str(cache_dir)],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        env=env,
     )
     stdout, _ = proc.communicate(input=init_msg + "\n", timeout=10)
     assert '"protocolVersion"' in stdout, f"Rust server bad response: {stdout}"
 
-    db = cache_dir / "index.db"
-    assert db.exists(), f"Rust cache DB not created at {db}"
-    return db
+    assert global_db.exists(), f"Rust cache DB not created at {global_db}"
+    return global_db
 
 
 def test_cache_tables_match(python_cache_db, rust_cache_db):

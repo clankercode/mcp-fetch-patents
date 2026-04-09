@@ -415,7 +415,7 @@ mod tests {
 
     fn make_config(tmp: &TempDir) -> PatentConfig {
         PatentConfig {
-            cache_local_dir: tmp.path().join("cache").join(".patents"),
+            cache_local_dir: tmp.path().join("cache").join("patents"),
             cache_global_db: tmp.path().join("global").join("index.db"),
             source_priority: vec![
                 "USPTO".into(),
@@ -439,6 +439,7 @@ mod tests {
             serpapi_key: None,
             bing_key: None,
             bigquery_project: None,
+            activity_journal: None,
         }
     }
 

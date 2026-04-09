@@ -24,6 +24,7 @@ from patent_mcp.cache import PatentCache  # noqa: E402
 from patent_mcp.config import get_config, load_config  # noqa: E402
 from patent_mcp.fetchers.orchestrator import FetcherOrchestrator  # noqa: E402
 from patent_mcp.id_canon import canonicalize  # noqa: E402
+from patent_mcp.journal import ActivityJournal  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -92,6 +93,7 @@ def _build_server(config=None):
     cfg = config or get_config()
     cache = PatentCache(cfg)
     orchestrator = FetcherOrchestrator(cfg, cache=cache)
+    journal = ActivityJournal(cfg.activity_journal)
 
     mcp = FastMCP(
         "patent-mcp-server",
@@ -230,6 +232,7 @@ def _build_server(config=None):
                 total_duration_ms=total_ms,
             )),
         }
+        journal.log_fetch(patent_ids, response["summary"])
         return _truncate_if_needed(response)
 
     # ------------------------------------------------------------------
@@ -238,8 +241,9 @@ def _build_server(config=None):
 
     @mcp.tool()
     def list_cached_patents() -> dict:
-        """List all patents cached in the local .patents/ directory."""
+        """List all cached patents."""
         entries = cache.list_all()
+        journal.log_list(len(entries))
         return {
             "patents": [
                 {"canonical_id": e.canonical_id, "cache_dir": str(e.cache_dir)}
@@ -286,6 +290,9 @@ def _build_server(config=None):
                     "metadata": None,
                 })
 
+        found = sum(1 for r in results if r["metadata"] is not None)
+        missing = len(results) - found
+        journal.log_metadata(patent_ids, found, missing)
         return {"results": results}
 
     return mcp

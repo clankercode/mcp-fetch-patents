@@ -30,6 +30,7 @@ pub struct PatentConfig {
     pub serpapi_key: Option<String>,
     pub bing_key: Option<String>,
     pub bigquery_project: Option<String>,
+    pub activity_journal: Option<PathBuf>,
 }
 
 /// TOML file schema for deserialization.
@@ -38,6 +39,7 @@ struct TomlFile {
     cache: Option<TomlCache>,
     sources: Option<TomlSources>,
     converters: Option<TomlConverters>,
+    journal: Option<TomlJournal>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -59,6 +61,11 @@ struct TomlSources {
 struct TomlEpoOps {
     client_id: Option<String>,
     client_secret: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TomlJournal {
+    path: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -166,7 +173,7 @@ pub fn load_config() -> Result<PatentConfig> {
     load_autoload_env_files()?;
 
     let mut cfg = PatentConfig {
-        cache_local_dir: PathBuf::from(".patents"),
+        cache_local_dir: xdg_data_home().join("patent-cache").join("patents"),
         cache_global_db: default_global_db(),
         source_priority: default_source_priority(),
         concurrency: 10,
@@ -181,6 +188,7 @@ pub fn load_config() -> Result<PatentConfig> {
         serpapi_key: None,
         bing_key: None,
         bigquery_project: None,
+        activity_journal: Some(PathBuf::from(".patent-activity.jsonl")),
     };
 
     // Load TOML file — check CWD first, then home dir (matches Python behavior)
@@ -225,6 +233,15 @@ pub fn load_config() -> Result<PatentConfig> {
             if let Some(epo) = sources.epo_ops {
                 cfg.epo_client_id = epo.client_id.filter(|s| !s.is_empty());
                 cfg.epo_client_secret = epo.client_secret.filter(|s| !s.is_empty());
+            }
+        }
+        if let Some(journal) = file.journal {
+            if let Some(v) = journal.path {
+                if v.is_empty() {
+                    cfg.activity_journal = None;
+                } else {
+                    cfg.activity_journal = Some(PathBuf::from(v));
+                }
             }
         }
         if let Some(conv) = file.converters {
@@ -279,6 +296,13 @@ pub fn load_config() -> Result<PatentConfig> {
     }
     if let Ok(v) = std::env::var("PATENT_BIGQUERY_PROJECT") {
         cfg.bigquery_project = Some(v).filter(|s| !s.is_empty());
+    }
+    if let Ok(v) = std::env::var("PATENT_ACTIVITY_JOURNAL") {
+        if v.is_empty() {
+            cfg.activity_journal = None;
+        } else {
+            cfg.activity_journal = Some(PathBuf::from(v));
+        }
     }
 
     Ok(cfg)
@@ -343,7 +367,7 @@ mod tests {
 
         // Verify that PatentConfig with correct Python-parity defaults assembles cleanly
         let cfg = PatentConfig {
-            cache_local_dir: PathBuf::from(".patents"),
+            cache_local_dir: xdg_data_home().join("patent-cache").join("patents"),
             cache_global_db: default_global_db(),
             source_priority: default_source_priority(),
             concurrency: 10,
@@ -358,8 +382,9 @@ mod tests {
             serpapi_key: None,
             bing_key: None,
             bigquery_project: None,
+            activity_journal: Some(PathBuf::from(".patent-activity.jsonl")),
         };
-        assert_eq!(cfg.cache_local_dir, PathBuf::from(".patents"));
+        assert_eq!(cfg.cache_local_dir, xdg_data_home().join("patent-cache").join("patents"));
         assert_eq!(cfg.concurrency, 10);
         assert!(cfg.fetch_all_sources);
         assert_eq!(cfg.timeout_secs, 30.0);

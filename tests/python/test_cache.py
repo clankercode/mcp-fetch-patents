@@ -57,7 +57,7 @@ class TestSchemaCreated:
         import sqlite3
         cfg = _make_config(tmp_path)
         cache = PatentCache(cfg)
-        with sqlite3.connect(str(cfg.cache_local_dir / "index.db")) as conn:
+        with sqlite3.connect(str(cfg.cache_global_db)) as conn:
             tables = {
                 row[0]
                 for row in conn.execute(
@@ -73,7 +73,7 @@ class TestSchemaCreated:
         import sqlite3
         cfg = _make_config(tmp_path)
         PatentCache(cfg)
-        with sqlite3.connect(str(cfg.cache_local_dir / "index.db")) as conn:
+        with sqlite3.connect(str(cfg.cache_global_db)) as conn:
             mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         assert mode == "wal"
 
@@ -462,9 +462,8 @@ class TestRobustness:
         pdf = _write_file(tmp_path / "src" / "US7654321.pdf")
         cache.store("US7654321", ArtifactSet(pdf=pdf), _make_meta())
 
-        # Corrupt the inventors column in the LOCAL db (which lookup() uses)
-        local_db = cfg.cache_local_dir / "index.db"
-        with _sqlite3.connect(str(local_db)) as conn:
+        # Corrupt the inventors column in the global db (which lookup() uses)
+        with _sqlite3.connect(str(cfg.cache_global_db)) as conn:
             conn.execute(
                 "UPDATE patents SET inventors = ? WHERE canonical_id = ?",
                 ("NOT VALID JSON", "US7654321"),

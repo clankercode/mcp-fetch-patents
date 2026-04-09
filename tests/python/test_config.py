@@ -10,6 +10,7 @@ import pytest
 from patent_mcp.config import (
     PatentConfig,
     default_global_db,
+    default_local_cache,
     load_config,
     xdg_data_home,
 )
@@ -52,7 +53,8 @@ class TestDefaultConfig:
 
     def test_default_cache_local_dir(self):
         cfg = load_config(env={})
-        assert cfg.cache_local_dir == Path(".patents")
+        assert cfg.cache_local_dir == default_local_cache()
+        assert str(cfg.cache_local_dir).endswith("patent-cache/patents")
 
     def test_default_source_priority_contains_uspto(self):
         cfg = load_config(env={})
@@ -453,3 +455,34 @@ class TestSourcePriorityCleanup:
         monkeypatch.delenv("PATENT_SERPAPI_KEY", raising=False)
         cfg = load_config(env={"PATENT_SERPAPI_KEY": "from_explicit_env"})
         assert cfg.serpapi_key == "from_explicit_env"
+
+
+# ---------------------------------------------------------------------------
+# T10 — Activity journal config
+# ---------------------------------------------------------------------------
+
+
+class TestActivityJournalConfig:
+    def test_default_journal_path(self):
+        cfg = load_config(env={})
+        assert cfg.activity_journal == Path(".patent-activity.jsonl")
+
+    def test_env_override_journal_path(self):
+        cfg = load_config(env={"PATENT_ACTIVITY_JOURNAL": "/tmp/my-journal.jsonl"})
+        assert cfg.activity_journal == Path("/tmp/my-journal.jsonl")
+
+    def test_env_empty_disables_journal(self):
+        cfg = load_config(env={"PATENT_ACTIVITY_JOURNAL": ""})
+        assert cfg.activity_journal is None
+
+    def test_toml_override_journal_path(self, tmp_path):
+        toml_file = tmp_path / "test.toml"
+        toml_file.write_text('[journal]\npath = "custom-activity.jsonl"\n')
+        cfg = load_config(env={}, toml_path=toml_file)
+        assert cfg.activity_journal == Path("custom-activity.jsonl")
+
+    def test_toml_empty_disables_journal(self, tmp_path):
+        toml_file = tmp_path / "test.toml"
+        toml_file.write_text('[journal]\npath = ""\n')
+        cfg = load_config(env={}, toml_path=toml_file)
+        assert cfg.activity_journal is None

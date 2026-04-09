@@ -1,8 +1,7 @@
 //! Patent artifact cache — mirrors Python patent_mcp.cache module.
 //!
-//! Two-layer cache:
-//!   - Local per-repo SQLite at `.patents/index.db`
-//!   - Global XDG index at `$XDG_DATA_HOME/patent-cache/index.db`
+//! Single global SQLite DB at `$XDG_DATA_HOME/patent-cache/index.db`.
+//! Patent files stored under `$XDG_DATA_HOME/patent-cache/patents/`.
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -193,28 +192,33 @@ impl Default for SessionCache {
 
 pub struct PatentCache {
     local_dir: PathBuf,
-    local_db: PathBuf,
-    #[allow(dead_code)]
     global_db: PathBuf,
 }
 
 impl PatentCache {
     pub fn new(config: &PatentConfig) -> Result<Self> {
         let local_dir = config.cache_local_dir.clone();
-        let local_db = local_dir.join("index.db");
         let global_db = config.cache_global_db.clone();
 
         let cache = PatentCache {
             local_dir,
-            local_db: local_db.clone(),
             global_db: global_db.clone(),
         };
 
-        cache.init_db(&local_db)?;
         cache.init_db(&global_db)?;
 
-        // Register local cache dir in global index
-        let conn = cache.connect(Some(&global_db))?;
+        // Suggest migration if old .patents/index.db exists in CWD
+        let old_local_db = std::path::Path::new(".patents").join("index.db");
+        if old_local_db.exists() {
+            tracing::info!(
+                "Found old .patents/index.db in CWD. Patent cache now uses {}. \
+                 The old .patents/ directory can be safely deleted.",
+                global_db.display()
+            );
+        }
+
+        // Register cache dir in global index
+        let conn = cache.connect()?;
         conn.execute(
             "INSERT OR IGNORE INTO cache_registrations(cache_dir, registered_at) VALUES (?1, ?2)",
             params![
@@ -235,9 +239,8 @@ impl PatentCache {
         Ok(())
     }
 
-    fn connect(&self, db_path: Option<&Path>) -> Result<Connection> {
-        let path = db_path.unwrap_or(&self.local_db);
-        let conn = Connection::open(path)?;
+    fn connect(&self) -> Result<Connection> {
+        let conn = Connection::open(&self.global_db)?;
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
         Ok(conn)
     }
@@ -248,7 +251,7 @@ impl PatentCache {
 
     /// Look up a patent in the local cache. Returns None on miss or stale.
     pub fn lookup(&self, canonical_id: &str) -> Result<Option<CacheResult>> {
-        let conn = self.connect(None)?;
+        let conn = self.connect()?;
 
         let row = {
             let mut stmt = conn.prepare(
@@ -385,7 +388,7 @@ impl PatentCache {
         }
 
         // Persist to DB in one transaction
-        let conn = self.connect(None)?;
+        let conn = self.connect()?;
         conn.execute(
             "INSERT OR REPLACE INTO patents
              (canonical_id, jurisdiction, doc_type, title, abstract, inventors,
@@ -438,7 +441,7 @@ impl PatentCache {
 
     /// List all patents in the local cache.
     pub fn list_all(&self) -> Result<Vec<CacheEntry>> {
-        let conn = self.connect(None)?;
+        let conn = self.connect()?;
         let mut stmt = conn.prepare("SELECT canonical_id, cache_dir FROM patents ORDER BY canonical_id")?;
         let entries = stmt.query_map([], |row| {
             Ok(CacheEntry {
@@ -461,7 +464,7 @@ mod tests {
 
     fn make_config(tmp: &TempDir) -> PatentConfig {
         PatentConfig {
-            cache_local_dir: tmp.path().join("local").join(".patents"),
+            cache_local_dir: tmp.path().join("local").join("patents"),
             cache_global_db: tmp.path().join("global").join("index.db"),
             source_priority: vec![],
             concurrency: 5,
@@ -476,6 +479,7 @@ mod tests {
             serpapi_key: None,
             bing_key: None,
             bigquery_project: None,
+            activity_journal: None,
         }
     }
 
@@ -501,7 +505,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let cfg = make_config(&tmp);
         let _cache = PatentCache::new(&cfg).unwrap();
-        assert!(cfg.cache_local_dir.join("index.db").exists());
+        assert!(cfg.cache_global_db.exists());
     }
 
     #[test]
