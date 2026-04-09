@@ -1,4 +1,5 @@
 """Source fetcher orchestrator — coordinates all sources, cache, and conversion."""
+
 from __future__ import annotations
 
 import asyncio
@@ -54,7 +55,6 @@ class FetcherOrchestrator:
             EpoOpsSource,
             GooglePatentsSource,
             IpAustraliaSource,
-            PatentsViewStubSource,
             PpubsSource,
             WipoScrapeSource,
             EspacenetSource,
@@ -128,7 +128,9 @@ class FetcherOrchestrator:
         if self._config.fetch_all_sources:
             # Concurrent fetch from all structured sources
             tasks = [s.fetch(patent, output_dir) for s in structured]
-            results: list[FetchResult] = await asyncio.gather(*tasks, return_exceptions=True)
+            results: list[FetchResult] = await asyncio.gather(
+                *tasks, return_exceptions=True
+            )
             for r in results:
                 if isinstance(r, Exception):
                     log.warning("Source raised exception: %s", r)
@@ -168,6 +170,7 @@ class FetcherOrchestrator:
         md_path: Path | None = None
         if all_pdfs and best_metadata:
             from patent_mcp.converters.pipeline import ConverterPipeline
+
             pipeline = ConverterPipeline(self._config)
             md_out = output_dir / f"{patent.canonical}.md"
             conv = pipeline.pdf_to_markdown(all_pdfs[0], md_out, best_metadata)
@@ -192,7 +195,9 @@ class FetcherOrchestrator:
                 images=[],
             )
             try:
-                self._cache.store(patent.canonical, artifacts, best_metadata, all_attempts)
+                self._cache.store(
+                    patent.canonical, artifacts, best_metadata, all_attempts
+                )
             except Exception as e:
                 log.warning("Cache store failed: %s", e)
 

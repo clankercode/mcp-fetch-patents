@@ -20,7 +20,7 @@ install-uv:
 
 # Install Rust binary from the local crate, replacing any existing install
 install-rs:
-    cargo install --path src/rust --force
+    CC=gcc cargo install --path src/rust --force
 
 # Install Python with all optional extras (via pip)
 install-all:
@@ -105,9 +105,9 @@ ci-full:
 serve:
     python -m patent_mcp
 
-# Start the Rust MCP server (all 16 tools: fetch + search)
+# Start the Rust MCP server (19 tools: fetch + search + status)
 serve-rust:
-    cargo run --manifest-path src/rust/Cargo.toml --bin patent-mcp-server
+    CC=gcc cargo run --manifest-path src/rust/Cargo.toml --bin patent-mcp-server
 
 # Start the patent-search MCP server (used by OpenCode agent)
 serve-search:
@@ -115,7 +115,7 @@ serve-search:
 
 # Smoke-test the Rust MCP server directly over stdio JSON-RPC
 mcp-smoke-rust PATENT_ID='US10000000B2':
-    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fetch_patents","arguments":{"patent_ids":["{{PATENT_ID}}"],"force_refresh":true}}}' | cargo run --quiet --manifest-path src/rust/Cargo.toml --bin patent-mcp-server
+    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fetch_patents","arguments":{"patent_ids":["{{PATENT_ID}}"],"force_refresh":true}}}' | CC=gcc cargo run --quiet --manifest-path src/rust/Cargo.toml --bin patent-mcp-server
 
 # Smoke-test the installed Rust MCP binary directly over stdio JSON-RPC
 mcp-smoke-rust-installed PATENT_ID='US10000000B2':

@@ -4,7 +4,7 @@
 
 ### Added
 - Rust MCP server with full feature parity to Python
-- 18 MCP tools: fetch patents, natural-language search, structured search, sessions, citation chains, family search, classification search, query suggestions, profile management, quick search, session delete
+- 19 MCP tools: fetch patents, natural-language search, structured search, sessions, citation chains, family search, classification search, query suggestions, profile management, quick search, session delete, patent status
 - SQLite-backed patent cache
 - Browser automation via chromiumoxide (CDP protocol)
 - SerpAPI, USPTO, EPO OPS search backends

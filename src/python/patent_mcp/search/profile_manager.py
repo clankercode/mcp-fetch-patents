@@ -4,6 +4,7 @@ Profiles are persistent Chromium user-data directories stored under
 ~/.local/share/patent-search/browser-profiles/<name>/. A lock file
 prevents two processes from using the same profile simultaneously.
 """
+
 from __future__ import annotations
 
 import json
@@ -27,6 +28,7 @@ def _default_profiles_dir() -> Path:
 # ---------------------------------------------------------------------------
 # Lock data
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ProfileLock:
@@ -52,6 +54,7 @@ class ProfileBusyError(Exception):
 # ProfileManager
 # ---------------------------------------------------------------------------
 
+
 class ProfileManager:
     """Manage Chromium browser profile directories and their locking."""
 
@@ -69,16 +72,25 @@ class ProfileManager:
 
     def get_profile_dir(self, name: str = "default") -> Path:
         """Return (and create) the profile directory for *name*."""
+        self._validate_name(name)
         d = self._dir / name
         d.mkdir(parents=True, exist_ok=True)
         return d
+
+    @staticmethod
+    def _validate_name(name: str) -> None:
+        if not name:
+            raise ValueError("Profile name cannot be empty")
+        if any(c in name for c in ("/", "\\", "\0")) or ".." in name:
+            raise ValueError(f"Invalid profile name: {name!r}")
 
     def list_profiles(self) -> list[str]:
         """Return names of all profile directories."""
         if not self._dir.exists():
             return []
         return sorted(
-            p.name for p in self._dir.iterdir()
+            p.name
+            for p in self._dir.iterdir()
             if p.is_dir() and not p.name.startswith(".")
         )
 
@@ -129,10 +141,15 @@ class ProfileManager:
                 locked2, existing2 = self.is_locked(name)
                 if existing2 is not None:
                     raise ProfileBusyError(name, existing2)
-                raise ProfileBusyError(name, ProfileLock(
-                    pid=0, hostname="unknown",
-                    started_at="", purpose="unknown",
-                ))
+                raise ProfileBusyError(
+                    name,
+                    ProfileLock(
+                        pid=0,
+                        hostname="unknown",
+                        started_at="",
+                        purpose="unknown",
+                    ),
+                )
 
     def release_lock(self, name: str) -> None:
         """Release the profile lock (only if we own it)."""
@@ -141,15 +158,22 @@ class ProfileManager:
             return
         try:
             data = json.loads(lp.read_text(encoding="utf-8"))
-            if data.get("pid") == os.getpid() and data.get("hostname") == socket.gethostname():
+            if (
+                data.get("pid") == os.getpid()
+                and data.get("hostname") == socket.gethostname()
+            ):
                 lp.unlink(missing_ok=True)
             else:
                 log.warning(
                     "Not releasing lock for profile '%s' — owned by pid=%s on %s",
-                    name, data.get("pid"), data.get("hostname"),
+                    name,
+                    data.get("pid"),
+                    data.get("hostname"),
                 )
         except Exception:
-            log.warning("Failed to parse lock file for profile '%s'", name, exc_info=True)
+            log.warning(
+                "Failed to parse lock file for profile '%s'", name, exc_info=True
+            )
 
     def is_locked(self, name: str) -> tuple[bool, ProfileLock | None]:
         """Check if a profile is locked. Clears stale locks (dead PID, same host)."""
@@ -175,7 +199,8 @@ class ProfileManager:
             if not _pid_alive(lock.pid):
                 log.info(
                     "Clearing stale lock for profile '%s' (pid=%d no longer running)",
-                    name, lock.pid,
+                    name,
+                    lock.pid,
                 )
                 lp.unlink(missing_ok=True)
                 return False, None

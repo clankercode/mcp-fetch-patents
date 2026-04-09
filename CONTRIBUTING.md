@@ -18,7 +18,7 @@ Use the `just` recipes instead — they set `CC=gcc` automatically:
 
 ```bash
 just build-rust          # debug build
-just test-rust           # run 205+ Rust tests
+just test-rust           # run 237+ Rust tests
 just lint-rust           # clippy with -D warnings
 just check-rust          # quick type-check
 ```

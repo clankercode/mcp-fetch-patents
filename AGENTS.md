@@ -13,7 +13,7 @@ Both expose MCP tools over stdio JSON-RPC.
 **Must use `CC=gcc` for all cargo commands** (default `cc` is a wrapper that breaks aws-lc-sys).
 
 ```bash
-just test-rust              # Run all Rust tests (205 tests)
+just test-rust              # Run all Rust tests (237 tests)
 just build-rust             # Debug build
 just build-rust-release     # Release build
 just check-rust             # Quick type-check
@@ -39,18 +39,23 @@ src/rust/src/
   id_canon/           — patent ID canonicalization
   cache/              — SQLite-backed patent cache
   fetchers/           — HTTP fetch backends (USPTO, EPO, Google)
-    http/             — HTTP fetcher implementations
+    http/             — HTTP fetcher implementations (per-source files)
     browser.rs        — Playwright/chromiumoxide browser fetcher
     web_search/       — web search utilities
-    mod.rs
+    mod.rs            — FetcherOrchestrator, PatentSource trait
   converters/         — format conversion (XML, JSON, etc.)
   journal.rs          — activity journal
   planner.rs          — NL query planner (deterministic, rule-based)
   ranking.rs          — PatentHit scoring/reranking
   search/             — search MCP tools
     mod.rs            — module root, SearchBackends struct
+    orchestrator.rs   — search orchestration (NL search + enrichment)
     session_manager.rs — session persistence (atomic JSON, path traversal guard)
-    searchers.rs      — SerpAPI, USPTO, EPO OPS backends (JSON + XML)
+    searchers/        — search backends
+      mod.rs          — re-exports, shared helpers
+      serpapi.rs      — SerpAPI Google Patents backend
+      uspto.rs        — USPTO text search backend
+      epo_ops.rs      — EPO OPS backend (OAuth, citations, family, XML/JSON)
     profile_manager.rs — browser profile dirs with file-based locking
     browser_search.rs  — Google Patents via chromiumoxide
   server/mod.rs       — MCP server: tool descriptors + handlers (fetch + search)
@@ -75,7 +80,7 @@ src/rust/src/
 - `list_cached_patents` — list all patents in local cache
 - `get_patent_metadata` — return cached metadata for patents
 
-**Search tools (16):**
+**Search + utility tools (16):**
 - `patent_search_natural` — NL search with planner + enrichment
 - `patent_search_structured` — structured field search
 - `patent_suggest_queries` — query suggestions from description
@@ -88,6 +93,7 @@ src/rust/src/
 - `patent_session_delete` — delete a session
 - `patent_quick_search` — one-shot search with auto session
 - `patent_search_profile_login_start` — launch browser for profile login
+- `patent_status` — health check, API key status, cache stats, converter availability
 
 ## Python Search Server
 

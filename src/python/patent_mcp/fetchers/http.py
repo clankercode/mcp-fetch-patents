@@ -869,28 +869,8 @@ class GooglePatentsSource(BasePatentSource):
             metadata=meta,
         )
 
+        # ---------------------------------------------------------------------------
+        # PatentsView stub (deprecated)
+        # ---------------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# PatentsView stub (deprecated)
-# ---------------------------------------------------------------------------
-
-
-class PatentsViewStubSource(BasePatentSource):
-    """PatentsView was shut down March 20, 2026. Returns helpful error."""
-
-    @property
-    def source_name(self) -> str:
-        return "PatentsView"
-
-    @property
-    def supported_jurisdictions(self) -> frozenset[str]:
-        return frozenset({"US"})
-
-    async def fetch(self, patent: "CanonicalPatentId", output_dir: Path) -> FetchResult:
-        attempt = SourceAttempt(
-            source=self.source_name,
-            success=False,
-            elapsed_ms=0.0,
-            error="PatentsView API was shut down March 20, 2026. Use USPTO ODP instead.",
-        )
         return FetchResult(source_attempt=attempt)

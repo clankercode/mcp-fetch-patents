@@ -393,6 +393,19 @@ class SessionManager:
             output_path = self._resolve_and_check(session_id).with_name(
                 f"{session_id}-report.md"
             )
+        else:
+            output_path = Path(output_path)
+            if not output_path.is_absolute():
+                depth = 0
+                for part in output_path.parts:
+                    if part == "..":
+                        depth -= 1
+                        if depth < 0:
+                            raise ValueError(
+                                f"output_path escapes directory: {output_path}"
+                            )
+                    elif part not in (".", "/"):
+                        depth += 1
 
         lines: list[str] = []
 
