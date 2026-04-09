@@ -67,12 +67,12 @@ ADR-style log of architectural decisions.
 
 ---
 
-## ADR-008: HTTP Transport Deferred to v2
+## ADR-008: Localhost HTTP Transport Added Alongside Stdio
 **Status:** Accepted
 **Date:** 2026-04-07
-**Context:** User confirmed v1 stdin only.
-**Decision:** v1 implements only stdin/stdout MCP transport.
-**Consequences:** Covers all standard MCP clients. HTTP added in v2 without breaking changes.
+**Context:** Some MCP clients launch stdio subprocesses inside restricted sandboxes, which breaks cache-backed startup and browser-profile writes.
+**Decision:** Keep stdio as the default launch mode, and add localhost-only Streamable HTTP on `127.0.0.1:38473/mcp` as an explicit `serve-http` mode in Rust and Python.
+**Consequences:** Existing stdio integrations keep working. Remote clients can connect to a user-started local server process outside their sandbox. Public network exposure remains out of scope.
 
 ---
 

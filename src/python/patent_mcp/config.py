@@ -95,7 +95,7 @@ class PatentConfig:
     search_browser_max_pages: int = 3
     search_browser_idle_timeout: float = 1800.0  # 30 minutes
     search_browser_debug_html_dir: Path | None = None
-    search_backend_default: str = "browser"  # "browser" | "serpapi" | "auto"
+    search_backend_default: str = "serpapi"  # "browser" | "serpapi" | "auto"
     search_enrich_top_n: int = 5
 
     # Misc test flags

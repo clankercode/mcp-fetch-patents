@@ -221,3 +221,28 @@ class BrowserManager:
                     )
                     self._close_internal()
                     return
+
+
+def start_startup_browser(
+    profiles_dir: Path | None,
+    idle_timeout: float,
+    timeout: float,
+    profile_name: str = "__startup__",
+) -> BrowserManager:
+    """Start a dedicated best-effort startup browser probe.
+
+    This uses its own profile and is not reused by later search sessions.
+    """
+    from patent_mcp.search.profile_manager import ProfileManager
+
+    pm = ProfileManager(profiles_dir=profiles_dir)
+    bm = BrowserManager(
+        profile_manager=pm,
+        profile_name=profile_name,
+        headless=True,
+        idle_timeout=idle_timeout,
+        timeout=timeout,
+    )
+    page = bm.get_page()
+    bm.release_page(page)
+    return bm

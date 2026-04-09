@@ -2,6 +2,8 @@
 import argparse
 import sys
 
+from patent_mcp.http_transport import DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -20,6 +22,10 @@ def main() -> None:
     # fetch-one subcommand: fetch a single patent and print JSON result
     fetch_p = subparsers.add_parser("fetch-one", help="Fetch a single patent and print JSON result")
     fetch_p.add_argument("id", help="Patent ID to fetch")
+
+    http_p = subparsers.add_parser("serve-http", help="Run the MCP server over localhost Streamable HTTP")
+    http_p.add_argument("--host", default=DEFAULT_HTTP_HOST)
+    http_p.add_argument("--port", type=int, default=DEFAULT_HTTP_PORT)
 
     args = parser.parse_args()
 
@@ -77,6 +83,17 @@ def main() -> None:
             }))
 
         asyncio.run(_run())
+        return
+
+    if args.command == "serve-http":
+        from patent_mcp.server import run_http
+
+        run_http(
+            cache_dir=args.cache_dir,
+            log_level=args.log_level,
+            host=args.host,
+            port=args.port,
+        )
         return
 
     # Default: run MCP server

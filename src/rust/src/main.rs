@@ -42,6 +42,13 @@ enum Command {
         #[arg(long, default_value = "-")]
         input: String,
     },
+    /// Run the MCP server over localhost Streamable HTTP
+    ServeHttp {
+        #[arg(long, default_value = patent_mcp::server::DEFAULT_HTTP_HOST)]
+        host: String,
+        #[arg(long, default_value_t = patent_mcp::server::DEFAULT_HTTP_PORT)]
+        port: u16,
+    },
 }
 
 #[tokio::main]
@@ -120,6 +127,9 @@ async fn main() -> Result<()> {
             let scored = ranker.rank(&hits_by_query, &intent);
             println!("{}", serde_json::to_string(&scored)?);
             Ok(())
+        }
+        Some(Command::ServeHttp { host, port }) => {
+            patent_mcp::server::run_http_server(config, &host, port).await
         }
         None => patent_mcp::server::run_server(config).await,
     }

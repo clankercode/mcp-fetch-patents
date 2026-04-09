@@ -220,7 +220,7 @@ pub fn load_config() -> Result<PatentConfig> {
         search_browser_max_pages: 3,
         search_browser_idle_timeout: 1800.0,
         search_browser_debug_html_dir: None,
-        search_backend_default: "browser".into(),
+        search_backend_default: "serpapi".into(),
         search_enrich_top_n: 5,
     };
 
@@ -495,7 +495,7 @@ mod tests {
             search_browser_max_pages: 3,
             search_browser_idle_timeout: 1800.0,
             search_browser_debug_html_dir: None,
-            search_backend_default: "browser".into(),
+            search_backend_default: "serpapi".into(),
             search_enrich_top_n: 5,
         };
         assert_eq!(
@@ -507,7 +507,7 @@ mod tests {
         assert_eq!(cfg.timeout_secs, 30.0);
         assert_eq!(cfg.converters_disabled, vec!["marker".to_string()]);
         assert!(cfg.epo_client_id.is_none());
-        assert_eq!(cfg.search_backend_default, "browser");
+        assert_eq!(cfg.search_backend_default, "serpapi");
         assert_eq!(cfg.search_enrich_top_n, 5);
         assert_eq!(cfg.search_browser_idle_timeout, 1800.0);
     }

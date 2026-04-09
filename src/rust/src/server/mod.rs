@@ -2,11 +2,19 @@
 //!
 //! Implements JSON-RPC 2.0 over stdin/stdout (MCP transport).
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::post,
+    Json, Router,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::Write;
+use std::sync::Arc;
 use tracing::warn;
 
 use std::sync::OnceLock;
@@ -15,6 +23,10 @@ use crate::config::PatentConfig;
 use crate::search::SearchBackends;
 
 static TOOLS_LIST: OnceLock<Value> = OnceLock::new();
+
+pub const DEFAULT_HTTP_HOST: &str = "127.0.0.1";
+pub const DEFAULT_HTTP_PORT: u16 = 38473;
+const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 
 // ---------------------------------------------------------------------------
 // JSON-RPC types
@@ -26,6 +38,14 @@ struct AppContext<'a> {
     orchestrator: &'a crate::fetchers::FetcherOrchestrator,
     journal: &'a crate::journal::ActivityJournal,
     backends: &'a SearchBackends,
+}
+
+struct ServerState {
+    config: PatentConfig,
+    cache: Arc<crate::cache::PatentCache>,
+    orchestrator: crate::fetchers::FetcherOrchestrator,
+    journal: crate::journal::ActivityJournal,
+    backends: SearchBackends,
 }
 
 #[derive(Debug, Deserialize)]
@@ -584,15 +604,10 @@ fn route_line(line: &str) -> Dispatch {
     let id = req.id.clone().unwrap_or(Value::Null);
 
     match req.method.as_str() {
-        "initialize" => Dispatch::Immediate(RpcResponse::ok(
-            id,
-            serde_json::json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": {"tools": {}},
-                "serverInfo": {"name": "patent-mcp-server", "version": "0.1.0"}
-            }),
-        )),
-        "initialized" => Dispatch::Notification,
+        "initialize" => {
+            Dispatch::Immediate(RpcResponse::ok(id, initialize_result(req.params.as_ref())))
+        }
+        "initialized" | "notifications/initialized" => Dispatch::Notification,
         "ping" => Dispatch::Immediate(RpcResponse::ok(id, serde_json::json!({}))),
         "tools/list" => Dispatch::Immediate(RpcResponse::ok(id, tools_list())),
         "tools/call" => match req.params {
@@ -601,6 +616,81 @@ fn route_line(line: &str) -> Dispatch {
         },
         _ => Dispatch::Immediate(RpcResponse::err(id, -32601, "Method not found")),
     }
+}
+
+fn initialize_result(params: Option<&Value>) -> Value {
+    let protocol_version = params
+        .and_then(|value| value.get("protocolVersion"))
+        .and_then(|value| value.as_str())
+        .filter(|version| *version == MCP_PROTOCOL_VERSION)
+        .unwrap_or(MCP_PROTOCOL_VERSION);
+
+    serde_json::json!({
+        "protocolVersion": protocol_version,
+        "capabilities": {"tools": {}},
+        "serverInfo": {"name": "patent-mcp-server", "version": "0.1.0"}
+    })
+}
+
+fn build_server_state(config: PatentConfig) -> Result<ServerState> {
+    let cache = Arc::new(crate::cache::PatentCache::new(&config)?);
+    let orchestrator = crate::fetchers::FetcherOrchestrator::new(config.clone(), cache.clone());
+    let journal = crate::journal::ActivityJournal::new(config.activity_journal.clone());
+    let backends = SearchBackends::new(&config, Some(orchestrator.session_cache()));
+    crate::search::browser_search::spawn_startup_browser(
+        config.search_browser_profiles_dir.clone(),
+        config.search_browser_default_profile.clone(),
+        config.search_browser_headless,
+    );
+
+    Ok(ServerState {
+        config,
+        cache,
+        orchestrator,
+        journal,
+        backends,
+    })
+}
+
+async fn handle_jsonrpc_line(line: &str, state: &ServerState) -> Option<RpcResponse> {
+    match route_line(line) {
+        Dispatch::Immediate(r) => Some(r),
+        Dispatch::Notification => None,
+        Dispatch::ToolCall { id, params } => {
+            let ctx = AppContext {
+                config: &state.config,
+                cache: state.cache.as_ref(),
+                orchestrator: &state.orchestrator,
+                journal: &state.journal,
+                backends: &state.backends,
+            };
+            Some(execute_tool_call(id, params, &ctx).await)
+        }
+    }
+}
+
+async fn handle_http_request(
+    State(state): State<Arc<ServerState>>,
+    body: String,
+) -> impl IntoResponse {
+    match handle_jsonrpc_line(&body, &state).await {
+        Some(response) => (
+            StatusCode::OK,
+            Json(serde_json::to_value(response).unwrap_or_else(|_| {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": null,
+                    "error": {"code": -32603, "message": "Serialization error"},
+                })
+            })),
+        )
+            .into_response(),
+        None => StatusCode::ACCEPTED.into_response(),
+    }
+}
+
+async fn method_not_allowed() -> impl IntoResponse {
+    StatusCode::METHOD_NOT_ALLOWED
 }
 
 // ---------------------------------------------------------------------------
@@ -1701,20 +1791,11 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
 /// Run the MCP server on stdin/stdout until EOF.
 #[tracing::instrument(skip_all)]
 pub async fn run_server(config: PatentConfig) -> Result<()> {
-    use crate::cache::PatentCache;
-    use crate::fetchers::FetcherOrchestrator;
-    use crate::journal::ActivityJournal;
-    use std::sync::Arc;
-
-    let cache = Arc::new(PatentCache::new(&config)?);
-    let orchestrator = FetcherOrchestrator::new(config.clone(), cache.clone());
-    let journal = ActivityJournal::new(config.activity_journal.clone());
+    let state = build_server_state(config)?;
 
     let stdout = std::io::stdout();
 
     tracing::info!("patent-mcp-server started (Rust implementation)");
-
-    let backends = SearchBackends::new(&config, Some(orchestrator.session_cache()));
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(64);
     std::thread::spawn(move || {
@@ -1735,19 +1816,8 @@ pub async fn run_server(config: PatentConfig) -> Result<()> {
             continue;
         }
 
-        let response = match route_line(&line) {
-            Dispatch::Immediate(r) => r,
-            Dispatch::Notification => continue,
-            Dispatch::ToolCall { id, params } => {
-                let ctx = AppContext {
-                    config: &config,
-                    cache: &cache,
-                    orchestrator: &orchestrator,
-                    journal: &journal,
-                    backends: &backends,
-                };
-                execute_tool_call(id, params, &ctx).await
-            }
+        let Some(response) = handle_jsonrpc_line(&line, &state).await else {
+            continue;
         };
 
         let mut out = stdout.lock();
@@ -1757,6 +1827,38 @@ pub async fn run_server(config: PatentConfig) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub async fn run_http_server(config: PatentConfig, host: &str, port: u16) -> Result<()> {
+    let state = Arc::new(build_server_state(config)?);
+    let app = Router::new()
+        .route(
+            "/mcp",
+            post(handle_http_request)
+                .get(method_not_allowed)
+                .delete(method_not_allowed),
+        )
+        .with_state(state);
+    let listener = bind_http_listener(host, port).await?;
+    let local_addr = listener.local_addr()?;
+
+    tracing::info!(
+        "patent-mcp-server started (Rust HTTP transport) on http://{}:{}/mcp [{}]",
+        host,
+        port,
+        local_addr
+    );
+
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+async fn bind_http_listener(host: &str, port: u16) -> Result<tokio::net::TcpListener> {
+    let addr = tokio::net::lookup_host((host, port))
+        .await?
+        .next()
+        .ok_or_else(|| anyhow!("No socket addresses resolved for {}:{}", host, port))?;
+    Ok(tokio::net::TcpListener::bind(addr).await?)
 }
 
 // ---------------------------------------------------------------------------
@@ -1880,6 +1982,13 @@ mod tests {
     #[test]
     fn test_initialized_notification_no_response() {
         let line = r#"{"jsonrpc":"2.0","method":"initialized"}"#;
+        let config = make_config();
+        assert!(handle_line(line, &config).is_none());
+    }
+
+    #[test]
+    fn test_notifications_initialized_no_response() {
+        let line = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
         let config = make_config();
         assert!(handle_line(line, &config).is_none());
     }

@@ -36,6 +36,54 @@ pub struct GooglePatentsBrowserSearch {
     debug_html_dir: Option<PathBuf>,
 }
 
+pub fn spawn_startup_browser(profiles_dir: Option<PathBuf>, profile_name: String, headless: bool) {
+    tokio::spawn(async move {
+        if let Err(e) = startup_browser_preflight(profiles_dir, &profile_name, headless).await {
+            warn!("Startup browser preflight failed: {}", e);
+        }
+    });
+}
+
+async fn startup_browser_preflight(
+    profiles_dir: Option<PathBuf>,
+    profile_name: &str,
+    headless: bool,
+) -> Result<()> {
+    let profile_manager = ProfileManager::new(profiles_dir);
+    profile_manager.acquire_lock(profile_name, "startup-preflight")?;
+    let _lock_guard = LockGuard {
+        pm: &profile_manager,
+        name: profile_name,
+    };
+
+    let mut config_builder = BrowserConfig::builder()
+        .no_sandbox()
+        .arg("--disable-gpu")
+        .window_size(1280, 900)
+        .arg(format!("--user-agent={}", BROWSER_USER_AGENT));
+
+    if !headless {
+        config_builder = config_builder.with_head();
+    }
+
+    let profile_dir = profile_manager.get_profile_dir(profile_name)?;
+    config_builder = config_builder.user_data_dir(profile_dir);
+
+    let config = config_builder.build()?;
+    let (browser, mut handler) = Browser::launch(config).await?;
+    let handler_task = tokio::spawn(async move { while let Some(_h) = handler.next().await {} });
+    let page = browser.new_page("about:blank").await?;
+
+    drop(page);
+    drop(browser);
+    let _ = handler_task.await;
+    tracing::info!(
+        "Startup browser preflight completed for profile {}",
+        profile_name
+    );
+    Ok(())
+}
+
 struct LockGuard<'a> {
     pm: &'a ProfileManager,
     name: &'a str,

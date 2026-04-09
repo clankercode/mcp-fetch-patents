@@ -42,11 +42,13 @@ impl SerpApiGooglePatentsBackend {
         patent_type: Option<&str>,
         max_results: usize,
     ) -> anyhow::Result<Vec<PatentHit>> {
+        // SerpAPI google_patents requires num between 10 and 100.
+        let clamped_num = max_results.clamp(10, 100);
         let mut params = vec![
             ("engine", "google_patents".to_string()),
             ("q", query.to_string()),
             ("api_key", self.api_key.clone()),
-            ("num", max_results.to_string()),
+            ("num", clamped_num.to_string()),
         ];
 
         if let Some(df) = date_from {

@@ -18,6 +18,8 @@ dependencies = [
     "beautifulsoup4>=4.12",
     "lxml>=5.0",
     "python-dotenv>=1.0",
+    "starlette>=0.37",
+    "uvicorn>=0.29",
 ]
 
 [project.optional-dependencies]
@@ -31,8 +33,6 @@ dev = [
     "respx>=0.21",
     "hypothesis>=6.100",
     "reportlab>=4.0",
-    "starlette>=0.37",
-    "uvicorn>=0.29",
     "httpx>=0.27",
     "anyio>=4.0",
 ]

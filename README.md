@@ -68,6 +68,20 @@ That's the whole setup. No API keys needed — 6 of 9 sources work without auth 
 
 For an installed Rust server, secrets can live in `~/.patents.toml`, normal environment variables, or `~/.patents-mcp.env` autoloaded by the server. A repo-local `.env` is only useful when the server is launched from that checkout.
 
+If your MCP client launches stdio servers inside a sandboxed subprocess, use the localhost HTTP transport instead:
+
+```bash
+patent-mcp-server serve-http
+```
+
+Then configure the client to connect to:
+
+```text
+http://127.0.0.1:38473/mcp
+```
+
+The repo pins the Python HTTP endpoint to `/mcp`, and the Rust server uses the same default URL. The shared contract today is that URL and localhost-only binding, not byte-for-byte HTTP transport parity.
+
 ### Use it
 
 ```
@@ -140,6 +154,14 @@ Cache-only metadata lookup — no network calls, instant response.
 ## Search tools (patent-search MCP server)
 
 The search server (`python -m patent_mcp.search`) provides tools for natural language patent search, structured queries, citation chains, and research sessions.
+
+It also supports localhost Streamable HTTP:
+
+```bash
+python -m patent_mcp.search serve-http
+```
+
+Search startup includes a best-effort browser prewarm only when the optional browser dependencies are installed. It is safe to ignore if unavailable, and it does not guarantee that later search calls reuse the same browser/profile.
 
 ### `patent_search_natural`
 
@@ -215,6 +237,8 @@ Agent                    MCP Server (Rust)
 
 **Cache:** Single global SQLite DB at `~/.local/share/patent-cache/index.db` shared across all projects. Patent files live in `~/.local/share/patent-cache/patents/{CANONICAL_ID}/`. First fetch takes seconds. Every subsequent fetch is instant — even across different repos.
 
+**HTTP transport:** Rust, Python fetch, and Python search can each run on localhost HTTP at the default URL `http://127.0.0.1:38473/mcp` when launched with `serve-http`. Stdio remains the default when you launch a server without `serve-http`. The implementations share the same default URL and localhost-only bind, but this repo does not currently claim wire-level Rust/Python HTTP parity.
+
 **Activity journal:** Each tool call is logged to `.patent-activity.jsonl` in the current working directory (JSONL format). This file is meant to be git-tracked so each project retains a record of what was searched, fetched, and accessed. Disable with `PATENT_ACTIVITY_JOURNAL=""`.
 
 **PDF → Markdown:** Four converter backends tried in order (pymupdf4llm → pdfplumber → pdftotext → marker). If one fails, the next picks up. Tables extracted and merged. OCR via tesseract for scanned patent figures. The output is clean enough for an LLM to read directly.
@@ -249,6 +273,15 @@ All config via autoloaded env files, `~/.patents.toml`, or environment variables
 ```bash
 # Rust tests (237 tests, <0.1s)
 cargo test --manifest-path src/rust/Cargo.toml
+
+# Start the Rust server over localhost HTTP
+just serve-rust-http
+
+# Start the Python fetch server over localhost HTTP
+just serve-http
+
+# Start the Python search server over localhost HTTP
+just serve-search-http
 
 # Direct stdio MCP smoke test against the Rust dev server
 just mcp-smoke-rust

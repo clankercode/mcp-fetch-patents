@@ -19,9 +19,14 @@ from dataclasses import asdict
 
 from mcp.server.fastmcp import FastMCP  # noqa: E402
 
+from patent_mcp.http_transport import (
+    DEFAULT_HTTP_HOST,
+    DEFAULT_HTTP_PORT,
+    run_http_server,
+)
 from patent_mcp.utils import now_iso
 
-mcp = FastMCP("patent-search")
+mcp = FastMCP("patent-search", stateless_http=True, json_response=True)
 
 # ---------------------------------------------------------------------------
 # Lazy imports — avoid loading heavy deps at import time
@@ -61,6 +66,8 @@ def _get_config():
 
 _browser_manager_lock = threading.Lock()
 _browser_managers: dict[str, object] = {}  # profile_name → BrowserManager
+_startup_browser_manager = None
+_startup_browser_attempted = False
 
 
 def _get_browser_manager(profile_name: str | None = None):
@@ -88,6 +95,31 @@ def _get_browser_manager(profile_name: str | None = None):
         )
         _browser_managers[name] = bm
         return bm
+
+
+def _start_startup_browser() -> None:
+    global _startup_browser_attempted, _startup_browser_manager
+    if _startup_browser_attempted:
+        return
+    _startup_browser_attempted = True
+
+    cfg = _get_config()
+    try:
+        from patent_mcp.search.browser_manager import (
+            BrowserNotAvailableError,
+            start_startup_browser,
+        )
+
+        _startup_browser_manager = start_startup_browser(
+            profiles_dir=cfg.search_browser_profiles_dir,
+            idle_timeout=cfg.search_browser_idle_timeout,
+            timeout=cfg.search_browser_timeout * 1000,
+        )
+        log.info("Startup browser prewarm ready")
+    except BrowserNotAvailableError as exc:
+        log.info("Startup browser prewarm skipped: %s", exc)
+    except Exception as exc:
+        log.warning("Startup browser prewarm failed: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -1252,7 +1284,13 @@ def _enrich_hits(scored_hits: list) -> list[str]:
 
 
 def run():
-    mcp.run()
+    _start_startup_browser()
+    mcp.run(transport="stdio")
+
+
+def run_http(host: str = DEFAULT_HTTP_HOST, port: int = DEFAULT_HTTP_PORT) -> None:
+    _start_startup_browser()
+    run_http_server(mcp, host=host, port=port)
 
 
 if __name__ == "__main__":

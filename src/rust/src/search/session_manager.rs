@@ -135,7 +135,11 @@ impl SessionManager {
             Some(d) => d,
             None => std::env::var("PATENT_SESSIONS_DIR")
                 .map(PathBuf::from)
-                .unwrap_or_else(|_| PathBuf::from(".patent-sessions")),
+                .unwrap_or_else(|_| {
+                    dirs::data_local_dir()
+                        .unwrap_or_else(|| PathBuf::from("."))
+                        .join("patent-sessions")
+                }),
         };
         fs::create_dir_all(&dir).ok();
         Self { dir }

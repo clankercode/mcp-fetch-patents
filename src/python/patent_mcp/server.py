@@ -24,8 +24,12 @@ MAX_RESPONSE_TOKENS = 50_000  # ~200KB; truncate content exceeding this
 from patent_mcp.cache import PatentCache  # noqa: E402
 from patent_mcp.config import get_config, load_config  # noqa: E402
 from patent_mcp.fetchers.orchestrator import FetcherOrchestrator  # noqa: E402
+from patent_mcp.http_transport import DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT, run_http_server  # noqa: E402
 from patent_mcp.id_canon import canonicalize  # noqa: E402
 from patent_mcp.journal import ActivityJournal  # noqa: E402
+
+_startup_browser_manager = None
+_startup_browser_attempted = False
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +108,8 @@ def _build_server(config=None):
 
     mcp = FastMCP(
         "patent-mcp-server",
+        stateless_http=True,
+        json_response=True,
         instructions=(
             "Fetch patents by ID number. Supports US, EP, WO, JP, CN, KR, AU, CA, NZ, BR, IN, "
             "and other ISO jurisdictions. Batch requests are explicitly encouraged — pass multiple "
@@ -317,6 +323,30 @@ def _build_server(config=None):
     return mcp
 
 
+def _start_startup_browser(cfg) -> None:
+    global _startup_browser_attempted, _startup_browser_manager
+    if _startup_browser_attempted:
+        return
+    _startup_browser_attempted = True
+
+    try:
+        from patent_mcp.search.browser_manager import (
+            BrowserNotAvailableError,
+            start_startup_browser,
+        )
+
+        _startup_browser_manager = start_startup_browser(
+            profiles_dir=cfg.search_browser_profiles_dir,
+            idle_timeout=cfg.search_browser_idle_timeout,
+            timeout=cfg.search_browser_timeout * 1000,
+        )
+        log.info("Startup browser prewarm ready")
+    except BrowserNotAvailableError as exc:
+        log.info("Startup browser prewarm skipped: %s", exc)
+    except Exception as exc:
+        log.warning("Startup browser prewarm failed: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -332,5 +362,25 @@ def run_server(cache_dir: str | None = None, log_level: str = "info") -> None:
         overrides["cache_local_dir"] = Path(cache_dir)
 
     cfg = load_config(overrides=overrides)
+    _start_startup_browser(cfg)
     mcp = _build_server(config=cfg)
     mcp.run(transport="stdio")
+
+
+def run_http(
+    cache_dir: str | None = None,
+    log_level: str = "info",
+    host: str = DEFAULT_HTTP_HOST,
+    port: int = DEFAULT_HTTP_PORT,
+) -> None:
+    numeric_level = getattr(logging, log_level.upper(), logging.INFO)
+    logging.getLogger().setLevel(numeric_level)
+
+    overrides: dict = {}
+    if cache_dir:
+        overrides["cache_local_dir"] = Path(cache_dir)
+
+    cfg = load_config(overrides=overrides)
+    _start_startup_browser(cfg)
+    mcp = _build_server(config=cfg)
+    run_http_server(mcp, host=host, port=port, log_level=log_level)

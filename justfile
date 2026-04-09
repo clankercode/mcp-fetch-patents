@@ -110,9 +110,21 @@ serve:
 serve-rust:
     CC=gcc cargo run --manifest-path src/rust/Cargo.toml --bin patent-mcp-server
 
+# Start the Rust MCP server over localhost Streamable HTTP
+serve-rust-http:
+    CC=gcc cargo run --manifest-path src/rust/Cargo.toml --bin patent-mcp-server -- serve-http
+
 # Start the patent-search MCP server (used by OpenCode agent)
 serve-search:
     python -m patent_mcp.search
+
+# Start the Python fetch MCP server over localhost Streamable HTTP
+serve-http:
+    python -m patent_mcp serve-http
+
+# Start the patent-search MCP server over localhost Streamable HTTP
+serve-search-http:
+    python -m patent_mcp.search serve-http
 
 # Smoke-test the Rust MCP server directly over stdio JSON-RPC
 mcp-smoke-rust PATENT_ID='US10000000B2':

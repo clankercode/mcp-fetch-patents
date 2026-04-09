@@ -6,7 +6,7 @@ Dual-implementation MCP server for patent fetching, caching, and search.
 - **Python** (`src/python/`) — reference implementation
 - **Rust** (`src/rust/`) — production implementation, feature parity with Python
 
-Both expose MCP tools over stdio JSON-RPC.
+Both expose MCP tools over stdio JSON-RPC. Rust and the Python entrypoints also expose localhost HTTP at `/mcp` via `serve-http`; the shared guarantee is the default URL, not wire-identical HTTP behavior across implementations.
 
 ## Build & Test Commands
 
@@ -21,6 +21,9 @@ just lint-rust              # Clippy with -D warnings
 just test                   # Python fast tests
 just ci                     # Python fast + Rust tests
 just serve-rust             # Run Rust MCP server
+just serve-rust-http        # Run Rust MCP server over localhost HTTP
+just serve-http             # Run Python fetch MCP server over localhost HTTP
+just serve-search-http      # Run Python search MCP server over localhost HTTP
 ```
 
 For direct cargo commands:
@@ -101,6 +104,8 @@ Separate MCP server from the fetch server:
 ```bash
 python -m patent_mcp.search    # search MCP server
 python -m patent_mcp           # fetch MCP server
+python -m patent_mcp.search serve-http   # search MCP server over localhost HTTP
+python -m patent_mcp serve-http          # fetch MCP server over localhost HTTP
 ```
 
 ## Environment Variables
