@@ -86,6 +86,7 @@ fmt-rust:
 
 # Run all lints (Rust + Python)
 lint: lint-rust
+    CC=gcc cargo fmt --manifest-path src/rust/Cargo.toml -- --check
     ruff check src/python/
 
 # Run all tests (Python fast + Rust)

@@ -680,79 +680,88 @@ def patent_search_structured(
     Returns:
         Combined results from all queried sources, with source attribution.
     """
-    if sources is None:
-        sources = ["USPTO", "EPO_OPS", "Google_Patents"]
+    try:
+        if sources is None:
+            sources = ["USPTO", "EPO_OPS", "Google_Patents"]
 
-    cfg = _get_config()
-    all_results = []
-    queries_run = []
+        cfg = _get_config()
+        all_results = []
+        queries_run = []
 
-    if "USPTO" in sources:
-        from patent_mcp.search.searchers import UsptoTextSearchBackend
+        if "USPTO" in sources:
+            from patent_mcp.search.searchers import UsptoTextSearchBackend
 
-        backend = UsptoTextSearchBackend()
-        hits = _run(
-            backend.search(
-                query=query,
-                date_from=date_from.replace("-", "") if date_from else None,
-                date_to=date_to.replace("-", "") if date_to else None,
-                max_results=max_results,
+            backend = UsptoTextSearchBackend()
+            hits = _run(
+                backend.search(
+                    query=query,
+                    date_from=date_from.replace("-", "") if date_from else None,
+                    date_to=date_to.replace("-", "") if date_to else None,
+                    max_results=max_results,
+                )
             )
-        )
-        all_results.extend(hits)
-        queries_run.append(
-            {"source": "USPTO", "query": query, "result_count": len(hits)}
-        )
-
-    if "EPO_OPS" in sources:
-        from patent_mcp.search.searchers import EpoOpsSearchBackend
-
-        epo = EpoOpsSearchBackend(
-            client_id=cfg.epo_client_id,
-            client_secret=cfg.epo_client_secret,
-        )
-        hits = _run(
-            epo.search(
-                query=query,
-                date_from=date_from,
-                date_to=date_to,
-                max_results=max_results,
+            all_results.extend(hits)
+            queries_run.append(
+                {"source": "USPTO", "query": query, "result_count": len(hits)}
             )
-        )
-        all_results.extend(hits)
-        queries_run.append(
-            {"source": "EPO_OPS", "query": query, "result_count": len(hits)}
-        )
 
-    if "Google_Patents" in sources and cfg.serpapi_key:
-        from patent_mcp.search.searchers import SerpApiGooglePatentsBackend
+        if "EPO_OPS" in sources:
+            from patent_mcp.search.searchers import EpoOpsSearchBackend
 
-        gp = SerpApiGooglePatentsBackend(api_key=cfg.serpapi_key)
-        hits = _run(gp.search(query=query, date_to=date_to, max_results=max_results))
-        all_results.extend(hits)
-        queries_run.append(
-            {"source": "Google_Patents", "query": query, "result_count": len(hits)}
-        )
+            epo = EpoOpsSearchBackend(
+                client_id=cfg.epo_client_id,
+                client_secret=cfg.epo_client_secret,
+            )
+            hits = _run(
+                epo.search(
+                    query=query,
+                    date_from=date_from,
+                    date_to=date_to,
+                    max_results=max_results,
+                )
+            )
+            all_results.extend(hits)
+            queries_run.append(
+                {"source": "EPO_OPS", "query": query, "result_count": len(hits)}
+            )
 
-    # Deduplicate
-    seen: set[str] = set()
-    deduped = []
-    for h in all_results:
-        if h.patent_id not in seen:
-            seen.add(h.patent_id)
-            deduped.append(h)
+        if "Google_Patents" in sources and cfg.serpapi_key:
+            from patent_mcp.search.searchers import SerpApiGooglePatentsBackend
 
-    if session_id and deduped:
-        _save_to_session(session_id, queries_run, deduped)
+            gp = SerpApiGooglePatentsBackend(api_key=cfg.serpapi_key)
+            hits = _run(
+                gp.search(query=query, date_to=date_to, max_results=max_results)
+            )
+            all_results.extend(hits)
+            queries_run.append(
+                {"source": "Google_Patents", "query": query, "result_count": len(hits)}
+            )
 
-    return {
-        "query": query,
-        "sources_searched": [q["source"] for q in queries_run],
-        "queries_run": queries_run,
-        "total_found": len(deduped),
-        "results": [_hit_to_dict(h) for h in deduped],
-        "isError": False,
-    }
+        # Deduplicate
+        seen: set[str] = set()
+        deduped = []
+        for h in all_results:
+            if h.patent_id not in seen:
+                seen.add(h.patent_id)
+                deduped.append(h)
+
+        if session_id and deduped:
+            _save_to_session(session_id, queries_run, deduped)
+
+        return {
+            "query": query,
+            "sources_searched": [q["source"] for q in queries_run],
+            "queries_run": queries_run,
+            "total_found": len(deduped),
+            "results": [_hit_to_dict(h) for h in deduped],
+            "isError": False,
+        }
+    except FileNotFoundError as e:
+        return {"error": str(e), "isError": True}
+    except ValueError as e:
+        return {"error": str(e), "isError": True}
+    except Exception as e:
+        return {"error": str(e), "isError": True}
 
 
 @mcp.tool()
@@ -777,59 +786,66 @@ def patent_citation_chain(
     Returns:
         Citation tree with patent metadata at each level.
     """
-    cfg = _get_config()
-    from patent_mcp.search.searchers import EpoOpsSearchBackend
+    try:
+        cfg = _get_config()
+        from patent_mcp.search.searchers import EpoOpsSearchBackend
 
-    epo = EpoOpsSearchBackend(
-        client_id=cfg.epo_client_id,
-        client_secret=cfg.epo_client_secret,
-    )
+        epo = EpoOpsSearchBackend(
+            client_id=cfg.epo_client_id,
+            client_secret=cfg.epo_client_secret,
+        )
 
-    tree: dict[str, Any] = {
-        "seed": patent_id,
-        "direction": direction,
-        "depth": depth,
-        "citations": {},
-    }
-
-    def _fetch_level(pid: str, dir_: str, current_depth: int) -> list[str]:
-        if current_depth <= 0:
-            return []
-        cited = _run(epo.get_citations(pid, direction=dir_))
-        return cited
-
-    directions = []
-    if direction in ("backward", "both"):
-        directions.append("backward")
-    if direction in ("forward", "both"):
-        directions.append("forward")
-
-    for dir_ in directions:
-        level_1 = _fetch_level(patent_id, dir_, depth)
-        tree["citations"][dir_] = {
-            "level_1": level_1,
+        tree: dict[str, Any] = {
+            "seed": patent_id,
+            "direction": direction,
+            "depth": depth,
+            "citations": {},
         }
-        if depth >= 2 and level_1:
-            level_2: list[str] = []
-            for pid in level_1[:10]:  # limit to avoid explosion
-                more = _fetch_level(pid, dir_, depth - 1)
-                level_2.extend(more)
-            # Deduplicate
-            seen: set[str] = set(level_1)
-            level_2 = [p for p in level_2 if p not in seen]
-            tree["citations"][dir_]["level_2"] = level_2
 
-    if session_id:
-        try:
-            sm = _get_session_manager()
-            with sm.update_session(session_id) as session:
-                if session.citation_chains is None:
-                    session.citation_chains = {}
-                session.citation_chains[patent_id] = tree["citations"]
-        except Exception as e:
-            log.warning("Failed to save citation chain to session: %s", e)
+        def _fetch_level(pid: str, dir_: str, current_depth: int) -> list[str]:
+            if current_depth <= 0:
+                return []
+            cited = _run(epo.get_citations(pid, direction=dir_))
+            return cited
 
-    return {**tree, "isError": False}
+        directions = []
+        if direction in ("backward", "both"):
+            directions.append("backward")
+        if direction in ("forward", "both"):
+            directions.append("forward")
+
+        for dir_ in directions:
+            level_1 = _fetch_level(patent_id, dir_, depth)
+            tree["citations"][dir_] = {
+                "level_1": level_1,
+            }
+            if depth >= 2 and level_1:
+                level_2: list[str] = []
+                for pid in level_1[:10]:  # limit to avoid explosion
+                    more = _fetch_level(pid, dir_, depth - 1)
+                    level_2.extend(more)
+                # Deduplicate
+                seen: set[str] = set(level_1)
+                level_2 = [p for p in level_2 if p not in seen]
+                tree["citations"][dir_]["level_2"] = level_2
+
+        if session_id:
+            try:
+                sm = _get_session_manager()
+                with sm.update_session(session_id) as session:
+                    if session.citation_chains is None:
+                        session.citation_chains = {}
+                    session.citation_chains[patent_id] = tree["citations"]
+            except Exception as e:
+                log.warning("Failed to save citation chain to session: %s", e)
+
+        return {**tree, "isError": False}
+    except FileNotFoundError as e:
+        return {"error": str(e), "isError": True}
+    except ValueError as e:
+        return {"error": str(e), "isError": True}
+    except Exception as e:
+        return {"error": str(e), "isError": True}
 
 
 @mcp.tool()
@@ -859,46 +875,61 @@ def patent_classification_search(
     Returns:
         Patents in the specified classification, plus breakdown by sub-class.
     """
-    cfg = _get_config()
-    from patent_mcp.search.searchers import EpoOpsSearchBackend
+    try:
+        cfg = _get_config()
+        from patent_mcp.search.searchers import EpoOpsSearchBackend
 
-    epo = EpoOpsSearchBackend(
-        client_id=cfg.epo_client_id,
-        client_secret=cfg.epo_client_secret,
-    )
-    hits = _run(
-        epo.search_by_classification(
-            cpc_code=code,
-            include_subclasses=include_subclasses,
-            date_from=date_from,
-            date_to=date_to,
-            max_results=max_results,
+        epo = EpoOpsSearchBackend(
+            client_id=cfg.epo_client_id,
+            client_secret=cfg.epo_client_secret,
         )
-    )
+        hits = _run(
+            epo.search_by_classification(
+                cpc_code=code,
+                include_subclasses=include_subclasses,
+                date_from=date_from,
+                date_to=date_to,
+                max_results=max_results,
+            )
+        )
 
-    queries_run = [
-        {"source": "EPO_OPS", "code": code, "include_subclasses": include_subclasses}
-    ]
+        queries_run = [
+            {
+                "source": "EPO_OPS",
+                "code": code,
+                "include_subclasses": include_subclasses,
+            }
+        ]
 
-    if session_id and hits:
-        _save_to_session(session_id, queries_run, hits)
-        try:
-            sm = _get_session_manager()
-            with sm.update_session(session_id) as session:
-                if code not in session.classifications_explored:
-                    session.classifications_explored.append(code)
-        except Exception:
-            pass
+        if session_id and hits:
+            _save_to_session(session_id, queries_run, hits)
+            try:
+                sm = _get_session_manager()
+                with sm.update_session(session_id) as session:
+                    if code not in session.classifications_explored:
+                        session.classifications_explored.append(code)
+            except Exception as e:
+                import logging
 
-    return {
-        "code": code,
-        "include_subclasses": include_subclasses,
-        "date_from": date_from,
-        "date_to": date_to,
-        "total_found": len(hits),
-        "results": [_hit_to_dict(h) for h in hits],
-        "isError": False,
-    }
+                logging.getLogger(__name__).debug(
+                    "Failed to save classification to session: %s", e
+                )
+
+        return {
+            "code": code,
+            "include_subclasses": include_subclasses,
+            "date_from": date_from,
+            "date_to": date_to,
+            "total_found": len(hits),
+            "results": [_hit_to_dict(h) for h in hits],
+            "isError": False,
+        }
+    except FileNotFoundError as e:
+        return {"error": str(e), "isError": True}
+    except ValueError as e:
+        return {"error": str(e), "isError": True}
+    except Exception as e:
+        return {"error": str(e), "isError": True}
 
 
 @mcp.tool()
@@ -921,33 +952,40 @@ def patent_family_search(
     Returns:
         List of family members with jurisdiction, publication number, and dates.
     """
-    cfg = _get_config()
-    from patent_mcp.search.searchers import EpoOpsSearchBackend
+    try:
+        cfg = _get_config()
+        from patent_mcp.search.searchers import EpoOpsSearchBackend
 
-    epo = EpoOpsSearchBackend(
-        client_id=cfg.epo_client_id,
-        client_secret=cfg.epo_client_secret,
-    )
-    family_members = _run(epo.get_family(patent_id))
+        epo = EpoOpsSearchBackend(
+            client_id=cfg.epo_client_id,
+            client_secret=cfg.epo_client_secret,
+        )
+        family_members = _run(epo.get_family(patent_id))
 
-    if session_id and family_members:
-        try:
-            sm = _get_session_manager()
-            with sm.update_session(session_id) as session:
-                if session.patent_families is None:
-                    session.patent_families = {}
-                session.patent_families[patent_id] = [
-                    m.get("patent_id", "") for m in family_members
-                ]
-        except Exception as e:
-            log.warning("Failed to save family data to session: %s", e)
+        if session_id and family_members:
+            try:
+                sm = _get_session_manager()
+                with sm.update_session(session_id) as session:
+                    if session.patent_families is None:
+                        session.patent_families = {}
+                    session.patent_families[patent_id] = [
+                        m.get("patent_id", "") for m in family_members
+                    ]
+            except Exception as e:
+                log.warning("Failed to save family data to session: %s", e)
 
-    return {
-        "patent_id": patent_id,
-        "family_size": len(family_members),
-        "members": family_members,
-        "isError": False,
-    }
+        return {
+            "patent_id": patent_id,
+            "family_size": len(family_members),
+            "members": family_members,
+            "isError": False,
+        }
+    except FileNotFoundError as e:
+        return {"error": str(e), "isError": True}
+    except ValueError as e:
+        return {"error": str(e), "isError": True}
+    except Exception as e:
+        return {"error": str(e), "isError": True}
 
 
 @mcp.tool()
@@ -1084,13 +1122,17 @@ def patent_search_profile_login_start(
             # Block until the user closes the browser window
             try:
                 context.wait_for_event("close", timeout=0)
-            except Exception:
-                pass
+            except Exception as e:
+                import logging
+
+                logging.getLogger(__name__).debug("Browser wait_for_event: %s", e)
 
             try:
                 context.close()
-            except Exception:
-                pass
+            except Exception as e:
+                import logging
+
+                logging.getLogger(__name__).debug("Browser context close: %s", e)
             pw.stop()
         except Exception as e:
             log.error("Login browser error: %s", e)
