@@ -385,9 +385,56 @@ def patent_session_delete(session_id: str) -> dict[str, Any]:
         return {"error": str(e), "isError": True}
 
 
-# ---------------------------------------------------------------------------
-# Search tools
-# ---------------------------------------------------------------------------
+@mcp.tool()
+def patent_quick_search(
+    description: str,
+    max_results: int = 10,
+    prior_art_cutoff: str | None = None,
+    backend: str = "auto",
+) -> dict[str, Any]:
+    """One-shot patent search: creates a session, runs natural-language search,
+    and returns a summary. Combines patent_session_create + patent_search_natural
+    into a single call.
+
+    Args:
+        description: Natural-language description of what you're looking for.
+        max_results: Max results to return. Default: 10.
+        prior_art_cutoff: ISO date (YYYY-MM-DD). If set, highlights patents before
+                          this date as prior art.
+        backend: Search backend: "browser", "serpapi", or "auto".
+
+    Returns:
+        Session ID, search results, and planner output.
+    """
+    if not description or not description.strip():
+        return {
+            "error": "description is required and must be non-empty",
+            "isError": True,
+        }
+
+    sm = _get_session_manager()
+    session = sm.create_session(description, prior_art_cutoff, "")
+    session_id = session.session_id
+
+    result = patent_search_natural(
+        description=description,
+        date_cutoff=prior_art_cutoff,
+        max_results=max_results,
+        session_id=session_id,
+        backend=backend,
+    )
+
+    return {
+        "session_id": session_id,
+        "topic": description,
+        "backend": backend,
+        "prior_art_cutoff": prior_art_cutoff,
+        "elapsed_ms": result.get("elapsed_ms", 0),
+        "total_found": result.get("total_found", 0),
+        "planner": result.get("planner", {}),
+        "results": result.get("results", []),
+        "isError": False,
+    }
 
 
 @mcp.tool()
@@ -1055,7 +1102,7 @@ def patent_search_profile_login_start(
 
     return {
         "status": "launched",
-        "profile": name,
+        "profile_name": name,
         "profile_dir": str(profile_dir),
         "message": (
             f"Headed browser launched with profile '{name}'. "

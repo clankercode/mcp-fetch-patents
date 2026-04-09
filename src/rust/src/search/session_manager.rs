@@ -384,11 +384,8 @@ impl SessionManager {
         lines.push(format!("**Session ID:** {}  ", session.session_id));
         lines.push(format!("**Created:** {}  ", session.created_at));
         lines.push(format!("**Last Modified:** {}  ", session.modified_at));
-        if session.prior_art_cutoff.is_some() {
-            lines.push(format!(
-                "**Prior Art Cutoff:** {}  ",
-                session.prior_art_cutoff.as_deref().unwrap()
-            ));
+        if let Some(cutoff) = session.prior_art_cutoff.as_deref() {
+            lines.push(format!("**Prior Art Cutoff:** {}  ", cutoff));
         }
         lines.push(String::new());
 

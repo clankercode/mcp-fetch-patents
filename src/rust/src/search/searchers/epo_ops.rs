@@ -160,7 +160,10 @@ impl EpoOpsSearchBackend {
 
         let token = self.get_oauth_token().await.ok().flatten();
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("Accept", "application/json".parse().unwrap());
+        headers.insert(
+            "Accept",
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
         if let Some(ref t) = token {
             if let Ok(val) = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", t)) {
                 headers.insert(reqwest::header::AUTHORIZATION, val);
@@ -246,7 +249,10 @@ impl EpoOpsSearchBackend {
         validate_path_segment(patent_id, "patent_id")?;
         let token = self.get_oauth_token().await.ok().flatten();
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("Accept", "application/json".parse().unwrap());
+        headers.insert(
+            "Accept",
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
         if let Some(ref t) = token {
             if let Ok(val) = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", t)) {
                 headers.insert(reqwest::header::AUTHORIZATION, val);
@@ -314,7 +320,10 @@ impl EpoOpsSearchBackend {
         validate_path_segment(patent_id, "patent_id")?;
         let token = self.get_oauth_token().await.ok().flatten();
         let mut headers = reqwest::header::HeaderMap::new();
-        headers.insert("Accept", "application/json".parse().unwrap());
+        headers.insert(
+            "Accept",
+            reqwest::header::HeaderValue::from_static("application/json"),
+        );
         if let Some(ref t) = token {
             if let Ok(val) = reqwest::header::HeaderValue::from_str(&format!("Bearer {}", t)) {
                 headers.insert(reqwest::header::AUTHORIZATION, val);

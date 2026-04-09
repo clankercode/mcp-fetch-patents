@@ -23,7 +23,7 @@ pub struct PatentHit {
     pub assignee: Option<String>,
     #[serde(default)]
     pub inventors: Vec<String>,
-    #[serde(default)]
+    #[serde(default, rename = "abstract")]
     pub abstract_text: Option<String>,
     #[serde(default)]
     pub source: String,

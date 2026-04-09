@@ -471,9 +471,20 @@ async fn build_fetch_patents_payload(
     for (raw_id, item) in plan {
         let orc = match item {
             FetchPlan::Invalid(result) => result,
-            FetchPlan::Valid => valid_iter
-                .next()
-                .expect("valid patent results should align with fetch plan"),
+            FetchPlan::Valid => {
+                valid_iter
+                    .next()
+                    .unwrap_or_else(|| crate::fetchers::OrchestratorResult {
+                        canonical_id: String::new(),
+                        success: false,
+                        cache_dir: None,
+                        files: HashMap::new(),
+                        metadata: None,
+                        sources: vec![],
+                        error: Some("Internal error: fetch result missing".into()),
+                        from_cache: false,
+                    })
+            }
         };
 
         let files: std::collections::HashMap<String, String> = orc
@@ -1214,16 +1225,17 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                 },
             });
 
-            if prior_art_cutoff.is_some() {
-                let cutoff = prior_art_cutoff.as_deref().unwrap_or("");
-                strategy.as_object_mut().unwrap().insert(
-                    "prior_art_notes".to_string(),
-                    serde_json::json!({
-                        "cutoff_date": cutoff,
-                        "reminder": format!("Search for patents filed/published BEFORE {}", cutoff),
-                        "tip": format!("A patent published after {} can still be prior art if its application was filed before that date", cutoff),
-                    }),
-                );
+            if let Some(cutoff) = prior_art_cutoff.as_deref() {
+                if let Some(obj) = strategy.as_object_mut() {
+                    obj.insert(
+                        "prior_art_notes".to_string(),
+                        serde_json::json!({
+                            "cutoff_date": cutoff,
+                            "reminder": format!("Search for patents filed/published BEFORE {}", cutoff),
+                            "tip": format!("A patent published after {} can still be prior art if its application was filed before that date", cutoff),
+                        }),
+                    );
+                }
             }
 
             let payload = serde_json::json!({
@@ -1577,6 +1589,8 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                 "serpapi_key": if ctx.config.serpapi_key.is_some() { "set" } else { "not set" },
                 "epo_client_id": if ctx.config.epo_client_id.is_some() { "set" } else { "not set" },
                 "epo_client_secret": if ctx.config.epo_client_secret.is_some() { "set" } else { "not set" },
+                "lens_api_key": if ctx.config.lens_api_key.is_some() { "set" } else { "not set" },
+                "bing_key": if ctx.config.bing_key.is_some() { "set" } else { "not set" },
             });
 
             let cached_patents = match ctx.cache.list_all() {
@@ -1612,6 +1626,10 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                 "browser_available": browser_available,
                 "converters_available": converters_available,
                 "search_backend_default": ctx.config.search_backend_default,
+                "sessions": {
+                    "directory": ctx.backends.session_manager.dir().to_string_lossy(),
+                    "count": ctx.backends.session_manager.list_sessions(None).await.unwrap_or_default().len(),
+                },
             });
 
             RpcResponse::tool_ok(id, &payload)

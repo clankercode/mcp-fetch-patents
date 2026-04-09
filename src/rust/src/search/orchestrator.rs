@@ -105,7 +105,24 @@ impl<'a> SearchOrchestrator<'a> {
                         }));
                         hits_by_query.insert(variant.query.clone(), hits);
                     }
-                    Ok(_) | Err(_) => {}
+                    Ok(_) => {
+                        queries_run.push(serde_json::json!({
+                            "source": "Google_Patents_Browser",
+                            "query": variant.query,
+                            "variant_type": variant.variant_type,
+                            "result_count": 0,
+                        }));
+                    }
+                    Err(e) => {
+                        warn!("Browser search failed for '{}': {}", variant.query, e);
+                        queries_run.push(serde_json::json!({
+                            "source": "Google_Patents_Browser",
+                            "query": variant.query,
+                            "variant_type": variant.variant_type,
+                            "result_count": 0,
+                            "error": e.to_string(),
+                        }));
+                    }
                 }
             }
         }
