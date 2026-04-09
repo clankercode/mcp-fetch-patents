@@ -9,12 +9,24 @@ use std::collections::HashMap;
 use std::io::Write;
 use tracing::warn;
 
+use std::sync::OnceLock;
+
 use crate::config::PatentConfig;
 use crate::search::SearchBackends;
+
+static TOOLS_LIST: OnceLock<Value> = OnceLock::new();
 
 // ---------------------------------------------------------------------------
 // JSON-RPC types
 // ---------------------------------------------------------------------------
+
+struct AppContext<'a> {
+    config: &'a PatentConfig,
+    cache: &'a crate::cache::PatentCache,
+    orchestrator: &'a crate::fetchers::FetcherOrchestrator,
+    journal: &'a crate::journal::ActivityJournal,
+    backends: &'a SearchBackends,
+}
 
 #[derive(Debug, Deserialize)]
 struct RpcRequest {
@@ -123,7 +135,9 @@ fn get_str_array_param(params: &serde_json::Value, name: &str) -> Option<Vec<Str
 }
 
 fn tools_list() -> Value {
-    serde_json::json!({
+    TOOLS_LIST
+        .get_or_init(|| {
+            serde_json::json!({
         "tools": [
             {
                 "name": "fetch_patents",
@@ -377,7 +391,9 @@ fn tools_list() -> Value {
                 "inputSchema": {"type": "object", "properties": {}}
             }
         ]
-    })
+            })
+        })
+        .clone()
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -600,15 +616,7 @@ async fn append_search_to_session(
 }
 
 #[tracing::instrument(skip_all)]
-async fn execute_tool_call(
-    id: Value,
-    params: Value,
-    config: &PatentConfig,
-    cache: &crate::cache::PatentCache,
-    orchestrator: &crate::fetchers::FetcherOrchestrator,
-    journal: &crate::journal::ActivityJournal,
-    backends: &SearchBackends,
-) -> RpcResponse {
+async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> RpcResponse {
     let tool_name = match params.get("name").and_then(|v| v.as_str()) {
         Some(n) => n.to_string(),
         None => return RpcResponse::err(id, -32602, "Missing tool name"),
@@ -619,15 +627,20 @@ async fn execute_tool_call(
             let patent_ids = get_str_array_param(&params, "patent_ids").unwrap_or_default();
             let force_refresh = get_bool_param(&params, "force_refresh").unwrap_or(false);
 
-            let payload =
-                build_fetch_patents_payload(&patent_ids, force_refresh, config, orchestrator).await;
+            let payload = build_fetch_patents_payload(
+                &patent_ids,
+                force_refresh,
+                ctx.config,
+                ctx.orchestrator,
+            )
+            .await;
 
-            journal.log_fetch(&patent_ids, &payload["summary"]);
+            ctx.journal.log_fetch(&patent_ids, &payload["summary"]);
 
             RpcResponse::tool_ok(id, &payload)
         }
 
-        "list_cached_patents" => match cache.list_all() {
+        "list_cached_patents" => match ctx.cache.list_all() {
             Ok(entries) => {
                 let patents: Vec<serde_json::Value> = entries
                     .iter()
@@ -639,7 +652,7 @@ async fn execute_tool_call(
                     })
                     .collect();
                 let count = patents.len();
-                journal.log_list(count);
+                ctx.journal.log_list(count);
                 let payload = serde_json::json!({"patents": patents, "count": count});
                 RpcResponse::tool_ok(id, &payload)
             }
@@ -654,7 +667,7 @@ async fn execute_tool_call(
                 .map(|raw_id| crate::id_canon::canonicalize(raw_id).canonical)
                 .collect();
             let canon_refs: Vec<&str> = canonical_ids.iter().map(|s| s.as_str()).collect();
-            let batch = match cache.lookup_batch(&canon_refs) {
+            let batch = match ctx.cache.lookup_batch(&canon_refs) {
                 Ok(b) => b,
                 Err(e) => return RpcResponse::tool_err(id, &format!("Cache error: {}", e)),
             };
@@ -685,7 +698,7 @@ async fn execute_tool_call(
 
             let found = results.iter().filter(|r| !r["metadata"].is_null()).count();
             let missing = results.len() - found;
-            journal.log_metadata(&patent_ids, found, missing);
+            ctx.journal.log_metadata(&patent_ids, found, missing);
 
             let payload = serde_json::json!({"results": results});
             RpcResponse::tool_ok(id, &payload)
@@ -699,16 +712,16 @@ async fn execute_tool_call(
             let max_results = get_int_param(&params, "max_results").unwrap_or(25) as usize;
             let backend = get_str_param(&params, "backend").unwrap_or_else(|| "auto".to_string());
             let profile_name = get_str_param(&params, "profile_name")
-                .unwrap_or_else(|| backends.browser_config.profile_name.clone());
+                .unwrap_or_else(|| ctx.backends.browser_config.profile_name.clone());
             let enrich_top_n = get_int_param(&params, "enrich_top_n")
-                .unwrap_or(config.search_enrich_top_n as u64)
+                .unwrap_or(ctx.config.search_enrich_top_n as u64)
                 as usize;
             let debug = get_bool_param(&params, "debug").unwrap_or(false);
 
             let orch = crate::search::orchestrator::SearchOrchestrator::new(
-                config,
-                backends,
-                orchestrator,
+                ctx.config,
+                ctx.backends,
+                ctx.orchestrator,
             );
             let result = orch
                 .natural_language_search(
@@ -745,7 +758,7 @@ async fn execute_tool_call(
             if let Some(ref sid) = session_id {
                 if !all_hits.is_empty() {
                     let _ = append_search_to_session(
-                        &backends.session_manager,
+                        &ctx.backends.session_manager,
                         sid,
                         &description,
                         "serpapi",
@@ -805,7 +818,7 @@ async fn execute_tool_call(
             let want_uspto = sources.iter().any(|s| s == "USPTO");
             let want_epo = sources.iter().any(|s| s == "EPO_OPS");
             let want_google =
-                sources.iter().any(|s| s == "Google_Patents") && config.serpapi_key.is_some();
+                sources.iter().any(|s| s == "Google_Patents") && ctx.config.serpapi_key.is_some();
 
             let (uspto_result, epo_result, google_result) = tokio::join!(
                 async {
@@ -814,7 +827,8 @@ async fn execute_tool_call(
                     }
                     let df = date_from.as_deref().map(|s| s.replace("-", ""));
                     let dt = date_to.as_deref().map(|s| s.replace("-", ""));
-                    let hits = backends
+                    let hits = ctx
+                        .backends
                         .uspto
                         .search(&query, df.as_deref(), dt.as_deref(), max_results)
                         .await
@@ -831,7 +845,8 @@ async fn execute_tool_call(
                     if !want_epo {
                         return (vec![], None);
                     }
-                    let hits = backends
+                    let hits = ctx
+                        .backends
                         .epo
                         .search(
                             &query,
@@ -853,7 +868,7 @@ async fn execute_tool_call(
                     if !want_google {
                         return (vec![], None);
                     }
-                    let serp = match backends.serpapi.as_ref() {
+                    let serp = match ctx.backends.serpapi.as_ref() {
                         Some(s) => s,
                         None => return (vec![], None),
                     };
@@ -904,7 +919,7 @@ async fn execute_tool_call(
             if let Some(ref sid) = session_id {
                 if !deduped.is_empty() {
                     let _ = append_search_to_session(
-                        &backends.session_manager,
+                        &ctx.backends.session_manager,
                         sid,
                         &query,
                         "structured",
@@ -946,7 +961,7 @@ async fn execute_tool_call(
             let depth = get_int_param(&params, "depth").unwrap_or(1) as i32;
             let session_id = get_str_param(&params, "session_id");
 
-            let epo = &backends.epo;
+            let epo = &ctx.backends.epo;
 
             let mut citations: serde_json::Map<String, Value> = serde_json::Map::new();
 
@@ -1048,7 +1063,7 @@ async fn execute_tool_call(
             let patent_id_for_session = patent_id.clone();
 
             if let Some(ref sid) = session_id {
-                let sm = &backends.session_manager;
+                let sm = &ctx.backends.session_manager;
                 if let Ok(mut session) = sm.load_session(sid).await {
                     let map = session.citation_chains.as_object_mut();
                     if let Some(map) = map {
@@ -1082,7 +1097,7 @@ async fn execute_tool_call(
             let session_id = get_str_param(&params, "session_id");
             let max_results = get_int_param(&params, "max_results").unwrap_or(25) as usize;
 
-            let epo = &backends.epo;
+            let epo = &ctx.backends.epo;
             let hits = epo
                 .search_by_classification(
                     &code,
@@ -1101,7 +1116,7 @@ async fn execute_tool_call(
                 if !hits.is_empty() {
                     let hit_refs: Vec<&crate::ranking::PatentHit> = hits.iter().collect();
                     let _ = append_search_to_session(
-                        &backends.session_manager,
+                        &ctx.backends.session_manager,
                         sid,
                         &code,
                         "EPO_OPS",
@@ -1139,7 +1154,7 @@ async fn execute_tool_call(
             let patent_id = get_str_param(&params, "patent_id").unwrap_or_default();
             let session_id = get_str_param(&params, "session_id");
 
-            let epo = &backends.epo;
+            let epo = &ctx.backends.epo;
             let members = epo.get_family(&patent_id).await.unwrap_or_else(|e| {
                 warn!("EPO OPS get_family failed for {}: {}", patent_id, e);
                 vec![]
@@ -1147,7 +1162,7 @@ async fn execute_tool_call(
 
             if let Some(ref sid) = session_id {
                 if !members.is_empty() {
-                    let sm = &backends.session_manager;
+                    let sm = &ctx.backends.session_manager;
                     if let Ok(mut session) = sm.load_session(sid).await {
                         session.patent_families.insert(
                             patent_id.clone(),
@@ -1236,7 +1251,7 @@ async fn execute_tool_call(
             let prior_art_cutoff = get_str_param(&params, "prior_art_cutoff");
             let notes = get_str_param(&params, "notes").unwrap_or_default();
 
-            let sm = &backends.session_manager;
+            let sm = &ctx.backends.session_manager;
             match sm
                 .create_session(&topic, prior_art_cutoff.as_deref(), &notes)
                 .await
@@ -1258,7 +1273,7 @@ async fn execute_tool_call(
         "patent_session_load" => {
             let session_id = get_str_param(&params, "session_id").unwrap_or_default();
 
-            let sm = &backends.session_manager;
+            let sm = &ctx.backends.session_manager;
             match sm.load_session(&session_id).await {
                 Ok(session) => {
                     let payload = serde_json::to_value(&session).unwrap_or(Value::Null);
@@ -1274,7 +1289,7 @@ async fn execute_tool_call(
                 .map(|n| n as usize)
                 .unwrap_or(20);
 
-            let sm = &backends.session_manager;
+            let sm = &ctx.backends.session_manager;
             let summaries = sm.list_sessions(Some(limit)).await.unwrap_or_default();
             let payload = serde_json::json!({
                 "sessions": summaries,
@@ -1287,7 +1302,7 @@ async fn execute_tool_call(
             let session_id = get_str_param(&params, "session_id").unwrap_or_default();
             let note = get_str_param(&params, "note").unwrap_or_default();
 
-            let sm = &backends.session_manager;
+            let sm = &ctx.backends.session_manager;
             match sm.add_note(&session_id, &note).await {
                 Ok(()) => {
                     let payload =
@@ -1305,7 +1320,7 @@ async fn execute_tool_call(
             let relevance =
                 get_str_param(&params, "relevance").unwrap_or_else(|| "high".to_string());
 
-            let sm = &backends.session_manager;
+            let sm = &ctx.backends.session_manager;
             match sm
                 .annotate_patent(&session_id, &patent_id, &annotation, &relevance)
                 .await
@@ -1336,7 +1351,7 @@ async fn execute_tool_call(
             let session_id = get_str_param(&params, "session_id").unwrap_or_default();
             let output_path = get_str_param(&params, "output_path").map(std::path::PathBuf::from);
 
-            let sm = &backends.session_manager;
+            let sm = &ctx.backends.session_manager;
             match sm
                 .export_markdown(&session_id, output_path.as_deref())
                 .await
@@ -1355,7 +1370,7 @@ async fn execute_tool_call(
         "patent_session_delete" => {
             let session_id = get_str_param(&params, "session_id").unwrap_or_default();
 
-            let sm = &backends.session_manager;
+            let sm = &ctx.backends.session_manager;
             match sm.delete_session(&session_id).await {
                 Ok(true) => {
                     let payload = serde_json::json!({
@@ -1385,7 +1400,7 @@ async fn execute_tool_call(
             let prior_art_cutoff = get_str_param(&params, "prior_art_cutoff");
             let backend = get_str_param(&params, "backend").unwrap_or_else(|| "auto".to_string());
 
-            let sm = &backends.session_manager;
+            let sm = &ctx.backends.session_manager;
             let session = match sm
                 .create_session(&description, prior_art_cutoff.as_deref(), "")
                 .await
@@ -1398,9 +1413,9 @@ async fn execute_tool_call(
             let session_id = session.session_id.clone();
 
             let orch = crate::search::orchestrator::SearchOrchestrator::new(
-                config,
-                backends,
-                orchestrator,
+                ctx.config,
+                ctx.backends,
+                ctx.orchestrator,
             );
             let result = orch
                 .natural_language_search(
@@ -1410,7 +1425,7 @@ async fn execute_tool_call(
                         max_results,
                         backend: backend.clone(),
                         enrich_top_n: 0,
-                        profile_name: backends.browser_config.profile_name.clone(),
+                        profile_name: ctx.backends.browser_config.profile_name.clone(),
                         debug: false,
                         date_cutoff: prior_art_cutoff.clone(),
                     },
@@ -1435,7 +1450,7 @@ async fn execute_tool_call(
                 result.scored.iter().map(|s| &s.hit).collect();
             if !all_hits.is_empty() {
                 let _ = append_search_to_session(
-                    &backends.session_manager,
+                    &ctx.backends.session_manager,
                     &session_id,
                     &description,
                     "quick_search",
@@ -1484,7 +1499,7 @@ async fn execute_tool_call(
         "patent_search_profile_login_start" => {
             let profile_name =
                 get_str_param(&params, "name").unwrap_or_else(|| "default".to_string());
-            let browser_cfg = &backends.browser_config;
+            let browser_cfg = &ctx.backends.browser_config;
 
             let pm = crate::search::profile_manager::ProfileManager::new(
                 browser_cfg.profiles_dir.clone(),
@@ -1559,17 +1574,17 @@ async fn execute_tool_call(
 
         "patent_status" => {
             let api_keys = serde_json::json!({
-                "serpapi_key": if config.serpapi_key.is_some() { "set" } else { "not set" },
-                "epo_client_id": if config.epo_client_id.is_some() { "set" } else { "not set" },
-                "epo_client_secret": if config.epo_client_secret.is_some() { "set" } else { "not set" },
+                "serpapi_key": if ctx.config.serpapi_key.is_some() { "set" } else { "not set" },
+                "epo_client_id": if ctx.config.epo_client_id.is_some() { "set" } else { "not set" },
+                "epo_client_secret": if ctx.config.epo_client_secret.is_some() { "set" } else { "not set" },
             });
 
-            let cached_patents = match cache.list_all() {
+            let cached_patents = match ctx.cache.list_all() {
                 Ok(entries) => entries.len(),
                 Err(_) => 0,
             };
 
-            let converter_tools = crate::converters::check_available_tools(config);
+            let converter_tools = crate::converters::check_available_tools(ctx.config);
             let converters_available: Vec<&str> = converter_tools
                 .iter()
                 .filter(|(_, available)| **available)
@@ -1591,12 +1606,12 @@ async fn execute_tool_call(
                 "status": "ok",
                 "api_keys": api_keys,
                 "cache": {
-                    "directory": config.cache_local_dir.to_string_lossy(),
+                    "directory": ctx.config.cache_local_dir.to_string_lossy(),
                     "patent_count": cached_patents,
                 },
                 "browser_available": browser_available,
                 "converters_available": converters_available,
-                "search_backend_default": config.search_backend_default,
+                "search_backend_default": ctx.config.search_backend_default,
             });
 
             RpcResponse::tool_ok(id, &payload)
@@ -1651,16 +1666,14 @@ pub async fn run_server(config: PatentConfig) -> Result<()> {
             Dispatch::Immediate(r) => r,
             Dispatch::Notification => continue,
             Dispatch::ToolCall { id, params } => {
-                execute_tool_call(
-                    id,
-                    params,
-                    &config,
-                    &cache,
-                    &orchestrator,
-                    &journal,
-                    &backends,
-                )
-                .await
+                let ctx = AppContext {
+                    config: &config,
+                    cache: &cache,
+                    orchestrator: &orchestrator,
+                    journal: &journal,
+                    backends: &backends,
+                };
+                execute_tool_call(id, params, &ctx).await
             }
         };
 
@@ -2205,6 +2218,22 @@ mod tests {
         serde_json::from_str(text).unwrap()
     }
 
+    fn make_ctx<'a>(
+        config: &'a PatentConfig,
+        cache: &'a crate::cache::PatentCache,
+        orchestrator: &'a crate::fetchers::FetcherOrchestrator,
+        journal: &'a crate::journal::ActivityJournal,
+        backends: &'a SearchBackends,
+    ) -> AppContext<'a> {
+        AppContext {
+            config,
+            cache,
+            orchestrator,
+            journal,
+            backends,
+        }
+    }
+
     #[tokio::test]
     async fn e2e_session_create_and_load() {
         let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
@@ -2219,11 +2248,7 @@ mod tests {
         let resp = execute_tool_call(
             id.clone(),
             create_params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         assert!(resp.result.is_some());
@@ -2237,11 +2262,7 @@ mod tests {
         let resp = execute_tool_call(
             id.clone(),
             load_params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         assert!(resp.result.is_some());
@@ -2262,11 +2283,7 @@ mod tests {
         let resp = execute_tool_call(
             id.clone(),
             create_params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         let payload = extract_payload(resp);
@@ -2281,11 +2298,7 @@ mod tests {
         let resp = execute_tool_call(
             id.clone(),
             note_params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         let result = extract_payload(resp);
@@ -2295,11 +2308,7 @@ mod tests {
         let resp = execute_tool_call(
             id.clone(),
             list_params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         let list = extract_payload(resp);
@@ -2320,11 +2329,7 @@ mod tests {
         let resp = execute_tool_call(
             id.clone(),
             create_params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         let payload = extract_payload(resp);
@@ -2340,11 +2345,7 @@ mod tests {
         let resp = execute_tool_call(
             id.clone(),
             export_params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         let result = extract_payload(resp);
@@ -2367,11 +2368,7 @@ mod tests {
         let resp = execute_tool_call(
             id,
             params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         assert!(resp.result.is_some());
@@ -2398,11 +2395,7 @@ mod tests {
         let resp = execute_tool_call(
             id,
             params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         assert!(resp.result.is_some());
@@ -2433,11 +2426,7 @@ mod tests {
         let resp = execute_tool_call(
             id,
             params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         assert!(resp.result.is_some());
@@ -2461,11 +2450,7 @@ mod tests {
         let resp = execute_tool_call(
             id,
             params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         assert!(resp.result.is_some());
@@ -2486,11 +2471,7 @@ mod tests {
         let resp = execute_tool_call(
             id,
             params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         assert!(resp.result.is_some());
@@ -2515,11 +2496,7 @@ mod tests {
         let resp = execute_tool_call(
             id,
             params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         assert!(resp.result.is_some());
@@ -2544,11 +2521,7 @@ mod tests {
         let resp = execute_tool_call(
             id,
             params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         assert!(resp.result.is_some());
@@ -2574,11 +2547,7 @@ mod tests {
         let resp = execute_tool_call(
             id.clone(),
             create_params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         let sid = extract_payload(resp)["session_id"]
@@ -2595,11 +2564,7 @@ mod tests {
         let resp = execute_tool_call(
             id,
             params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         assert!(resp.result.is_some());
@@ -2611,11 +2576,7 @@ mod tests {
         let resp = execute_tool_call(
             Value::Number(921.into()),
             load_params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         let loaded = extract_payload(resp);
@@ -2638,11 +2599,7 @@ mod tests {
         let resp = execute_tool_call(
             id,
             params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         assert!(resp.result.is_some());
@@ -2669,11 +2626,7 @@ mod tests {
         let resp = execute_tool_call(
             id,
             params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         assert!(resp.result.is_some());
@@ -2695,11 +2648,7 @@ mod tests {
         let resp = execute_tool_call(
             id.clone(),
             create_params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         let sid = extract_payload(resp)["session_id"]
@@ -2716,11 +2665,7 @@ mod tests {
         let resp = execute_tool_call(
             id,
             params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         assert!(resp.result.is_some());
@@ -2735,11 +2680,7 @@ mod tests {
         let resp = execute_tool_call(
             Value::Number(1201.into()),
             load_params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         let loaded = extract_payload(resp);
@@ -2758,11 +2699,7 @@ mod tests {
         let resp = execute_tool_call(
             id.clone(),
             create_params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         let sid = extract_payload(resp)["session_id"]
@@ -2779,11 +2716,7 @@ mod tests {
         let resp = execute_tool_call(
             id,
             params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         assert!(resp.result.is_some());
@@ -2797,11 +2730,7 @@ mod tests {
         let resp = execute_tool_call(
             Value::Number(1301.into()),
             load_params,
-            &config,
-            &cache,
-            &orchestrator,
-            &journal,
-            &backends,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
         )
         .await;
         let loaded = extract_payload(resp);

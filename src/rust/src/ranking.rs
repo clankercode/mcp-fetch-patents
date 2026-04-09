@@ -115,14 +115,17 @@ impl SearchRanker {
         for (pid, hit) in &merged {
             let mut breakdown: HashMap<String, f64> = HashMap::new();
 
+            let lower_title = hit.title.as_deref().map(|t| t.to_lowercase());
+            let lower_abstract = hit.abstract_text.as_deref().map(|t| t.to_lowercase());
+
             breakdown.insert(
                 "title_coverage".to_string(),
-                text_coverage(hit.title.as_deref(), &compiled) * 3.0,
+                text_coverage(lower_title.as_deref(), &compiled) * 3.0,
             );
 
             breakdown.insert(
                 "snippet_coverage".to_string(),
-                text_coverage(hit.abstract_text.as_deref(), &compiled) * 2.0,
+                text_coverage(lower_abstract.as_deref(), &compiled) * 2.0,
             );
 
             // Multi-query bonus: found by N variants -> high signal
@@ -196,14 +199,13 @@ fn text_coverage(text: Option<&str>, compiled: &[CompiledConcept]) -> f64 {
     if compiled.is_empty() {
         return 0.0;
     }
-    let lower = text.to_lowercase();
     let found = compiled
         .iter()
         .filter(|c| {
             if let Some(ref re) = c.regex {
-                re.is_match(&lower)
+                re.is_match(text)
             } else {
-                lower.contains(&c.lower)
+                text.contains(&c.lower)
             }
         })
         .count();
@@ -318,7 +320,7 @@ mod tests {
     fn text_coverage_full_match() {
         let concepts = vec!["neural".to_string(), "network".to_string()];
         let compiled = compile_concepts(&concepts);
-        let score = text_coverage(Some("Neural Network Architecture"), &compiled);
+        let score = text_coverage(Some("neural network architecture"), &compiled);
         assert!(
             (score - 1.0).abs() < f64::EPSILON,
             "expected 1.0, got {score}"
@@ -329,7 +331,7 @@ mod tests {
     fn text_coverage_partial_match() {
         let concepts = vec!["neural".to_string(), "quantum".to_string()];
         let compiled = compile_concepts(&concepts);
-        let score = text_coverage(Some("Neural Network Architecture"), &compiled);
+        let score = text_coverage(Some("neural network architecture"), &compiled);
         assert!(
             (score - 0.5).abs() < f64::EPSILON,
             "expected 0.5, got {score}"
@@ -340,7 +342,7 @@ mod tests {
     fn text_coverage_no_match() {
         let concepts = vec!["quantum".to_string(), "entanglement".to_string()];
         let compiled = compile_concepts(&concepts);
-        let score = text_coverage(Some("Neural Network Architecture"), &compiled);
+        let score = text_coverage(Some("neural network architecture"), &compiled);
         assert!(
             (score - 0.0).abs() < f64::EPSILON,
             "expected 0.0, got {score}"
