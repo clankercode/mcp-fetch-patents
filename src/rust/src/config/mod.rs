@@ -31,6 +31,16 @@ pub struct PatentConfig {
     pub bing_key: Option<String>,
     pub bigquery_project: Option<String>,
     pub activity_journal: Option<PathBuf>,
+    // Search settings
+    pub search_browser_profiles_dir: Option<PathBuf>,
+    pub search_browser_default_profile: String,
+    pub search_browser_headless: bool,
+    pub search_browser_timeout: f64,
+    pub search_browser_max_pages: usize,
+    pub search_browser_idle_timeout: f64,
+    pub search_browser_debug_html_dir: Option<PathBuf>,
+    pub search_backend_default: String,
+    pub search_enrich_top_n: usize,
 }
 
 /// TOML file schema for deserialization.
@@ -40,6 +50,7 @@ struct TomlFile {
     sources: Option<TomlSources>,
     converters: Option<TomlConverters>,
     journal: Option<TomlJournal>,
+    search: Option<TomlSearch>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -66,6 +77,19 @@ struct TomlEpoOps {
 #[derive(Debug, Deserialize, Default)]
 struct TomlJournal {
     path: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TomlSearch {
+    browser_profiles_dir: Option<String>,
+    browser_default_profile: Option<String>,
+    browser_headless: Option<bool>,
+    browser_timeout: Option<f64>,
+    browser_max_pages: Option<usize>,
+    browser_idle_timeout: Option<f64>,
+    browser_debug_html_dir: Option<String>,
+    backend_default: Option<String>,
+    enrich_top_n: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -189,6 +213,15 @@ pub fn load_config() -> Result<PatentConfig> {
         bing_key: None,
         bigquery_project: None,
         activity_journal: Some(PathBuf::from(".patent-activity.jsonl")),
+        search_browser_profiles_dir: None,
+        search_browser_default_profile: "default".into(),
+        search_browser_headless: true,
+        search_browser_timeout: 60.0,
+        search_browser_max_pages: 3,
+        search_browser_idle_timeout: 1800.0,
+        search_browser_debug_html_dir: None,
+        search_backend_default: "browser".into(),
+        search_enrich_top_n: 5,
     };
 
     // Load TOML file — check CWD first, then home dir (matches Python behavior)
@@ -242,6 +275,35 @@ pub fn load_config() -> Result<PatentConfig> {
                 } else {
                     cfg.activity_journal = Some(PathBuf::from(v));
                 }
+            }
+        }
+        if let Some(s) = file.search {
+            if let Some(v) = s.browser_profiles_dir {
+                cfg.search_browser_profiles_dir = if v.is_empty() { None } else { Some(PathBuf::from(v)) };
+            }
+            if let Some(v) = s.browser_default_profile {
+                cfg.search_browser_default_profile = v;
+            }
+            if let Some(v) = s.browser_headless {
+                cfg.search_browser_headless = v;
+            }
+            if let Some(v) = s.browser_timeout {
+                cfg.search_browser_timeout = v;
+            }
+            if let Some(v) = s.browser_max_pages {
+                cfg.search_browser_max_pages = v;
+            }
+            if let Some(v) = s.browser_idle_timeout {
+                cfg.search_browser_idle_timeout = v;
+            }
+            if let Some(v) = s.browser_debug_html_dir {
+                cfg.search_browser_debug_html_dir = if v.is_empty() { None } else { Some(PathBuf::from(v)) };
+            }
+            if let Some(v) = s.backend_default {
+                cfg.search_backend_default = v;
+            }
+            if let Some(v) = s.enrich_top_n {
+                cfg.search_enrich_top_n = v;
             }
         }
         if let Some(conv) = file.converters {
@@ -303,6 +365,34 @@ pub fn load_config() -> Result<PatentConfig> {
         } else {
             cfg.activity_journal = Some(PathBuf::from(v));
         }
+    }
+    // Search env vars
+    if let Ok(v) = std::env::var("PATENT_SEARCH_BROWSER_PROFILES_DIR") {
+        cfg.search_browser_profiles_dir = Some(PathBuf::from(v));
+    }
+    if let Ok(v) = std::env::var("PATENT_SEARCH_BROWSER_DEFAULT_PROFILE") {
+        cfg.search_browser_default_profile = v;
+    }
+    if let Ok(v) = std::env::var("PATENT_SEARCH_BROWSER_HEADLESS") {
+        cfg.search_browser_headless = parse_bool_env(&v);
+    }
+    if let Ok(v) = std::env::var("PATENT_SEARCH_BROWSER_TIMEOUT") {
+        if let Ok(t) = v.parse::<f64>() { cfg.search_browser_timeout = t; }
+    }
+    if let Ok(v) = std::env::var("PATENT_SEARCH_BROWSER_MAX_PAGES") {
+        if let Ok(n) = v.parse::<usize>() { cfg.search_browser_max_pages = n; }
+    }
+    if let Ok(v) = std::env::var("PATENT_SEARCH_BROWSER_IDLE_TIMEOUT") {
+        if let Ok(t) = v.parse::<f64>() { cfg.search_browser_idle_timeout = t; }
+    }
+    if let Ok(v) = std::env::var("PATENT_SEARCH_BROWSER_DEBUG_HTML_DIR") {
+        cfg.search_browser_debug_html_dir = Some(PathBuf::from(v));
+    }
+    if let Ok(v) = std::env::var("PATENT_SEARCH_BACKEND_DEFAULT") {
+        cfg.search_backend_default = v;
+    }
+    if let Ok(v) = std::env::var("PATENT_SEARCH_ENRICH_TOP_N") {
+        if let Ok(n) = v.parse::<usize>() { cfg.search_enrich_top_n = n; }
     }
 
     Ok(cfg)
@@ -383,6 +473,15 @@ mod tests {
             bing_key: None,
             bigquery_project: None,
             activity_journal: Some(PathBuf::from(".patent-activity.jsonl")),
+            search_browser_profiles_dir: None,
+            search_browser_default_profile: "default".into(),
+            search_browser_headless: true,
+            search_browser_timeout: 60.0,
+            search_browser_max_pages: 3,
+            search_browser_idle_timeout: 1800.0,
+            search_browser_debug_html_dir: None,
+            search_backend_default: "browser".into(),
+            search_enrich_top_n: 5,
         };
         assert_eq!(cfg.cache_local_dir, xdg_data_home().join("patent-cache").join("patents"));
         assert_eq!(cfg.concurrency, 10);
@@ -390,6 +489,9 @@ mod tests {
         assert_eq!(cfg.timeout_secs, 30.0);
         assert_eq!(cfg.converters_disabled, vec!["marker".to_string()]);
         assert!(cfg.epo_client_id.is_none());
+        assert_eq!(cfg.search_backend_default, "browser");
+        assert_eq!(cfg.search_enrich_top_n, 5);
+        assert_eq!(cfg.search_browser_idle_timeout, 1800.0);
     }
 
     #[test]

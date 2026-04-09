@@ -9,4 +9,6 @@ pub mod converters;
 pub mod fetchers;
 pub mod id_canon;
 pub mod journal;
+pub mod planner;
+pub mod ranking;
 pub mod server;

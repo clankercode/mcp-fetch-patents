@@ -55,6 +55,7 @@ class QueryRecord:
     query_text: str
     result_count: int
     results: list[PatentHit]
+    metadata: dict[str, Any] | None = None  # planner output, backend info, etc.
 
 
 @dataclass
@@ -103,6 +104,7 @@ def _patent_hit_from_dict(d: dict[str, Any]) -> PatentHit:
         relevance=d.get("relevance", "unknown"),
         note=d.get("note", ""),
         prior_art=d.get("prior_art"),
+        url=d.get("url"),
     )
 
 
@@ -114,6 +116,7 @@ def _query_record_from_dict(d: dict[str, Any]) -> QueryRecord:
         query_text=d.get("query_text", ""),
         result_count=d.get("result_count", 0),
         results=[_patent_hit_from_dict(r) for r in d.get("results", [])],
+        metadata=d.get("metadata"),
     )
 
 

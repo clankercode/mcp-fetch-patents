@@ -234,8 +234,9 @@ class TestPatentSearchNatural:
             MockBackend.return_value.search = fake_search
             server.patent_search_natural("test", date_cutoff="2020-01-01")
 
-        assert len(calls) == 1
-        assert calls[0]["date_to"] == "2020-01-01"
+        # Planner generates multiple query variants, so SerpAPI may be called multiple times
+        assert len(calls) >= 1
+        assert all(c["date_to"] == "2020-01-01" for c in calls)
 
     def test_deduplicates_results(self):
         from patent_mcp.search import server, searchers
@@ -261,9 +262,11 @@ class TestPatentSuggestQueries:
         result = patent_suggest_queries("wireless charging through metal")
         assert "topic" in result
         assert "strategy" in result
-        assert "step_1_concept_expansion" in result["strategy"]
+        assert "step_1_natural_search" in result["strategy"]
         assert "step_2_classification" in result["strategy"]
-        assert "recommended_queries" in result["strategy"]
+        # Planner output is included
+        assert "planner_output" in result
+        assert "query_variants" in result["planner_output"]
 
     def test_prior_art_cutoff_adds_notes(self):
         from patent_mcp.search.server import patent_suggest_queries

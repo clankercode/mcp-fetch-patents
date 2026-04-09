@@ -101,6 +101,13 @@ client_secret = ""
 [converters]
 order = ["pymupdf4llm", "pdfplumber", "pdftotext"]
 disabled = []
+
+[search]
+backend_default = "browser"          # "browser" | "serpapi" | "auto"
+browser_headless = true
+browser_idle_timeout = 1800          # 30 minutes
+browser_max_pages = 3
+enrich_top_n = 5
 ```
 
 All values can be overridden with environment variables. Environment variables take precedence over the config file.
@@ -142,4 +149,10 @@ GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
 | `PATENT_DISABLE_MARKER` | `false` | Disable marker PDF converter |
 | `PATENT_BIGQUERY_PROJECT` | — | GCP project for BigQuery |
 | `PATENT_ACTIVITY_JOURNAL` | `.patent-activity.jsonl` | Per-repo activity journal (empty = disabled) |
+| `PATENT_SEARCH_BACKEND_DEFAULT` | `browser` | Default search backend (`browser`, `serpapi`, `auto`) |
+| `PATENT_SEARCH_BROWSER_HEADLESS` | `true` | Run Playwright in headless mode |
+| `PATENT_SEARCH_BROWSER_IDLE_TIMEOUT` | `1800` | Browser idle timeout in seconds |
+| `PATENT_SEARCH_BROWSER_MAX_PAGES` | `3` | Max Google Patents result pages per query |
+| `PATENT_SEARCH_BROWSER_PROFILES_DIR` | XDG default | Browser profile storage directory |
+| `PATENT_SEARCH_ENRICH_TOP_N` | `5` | Enrich top N search results with full metadata |
 | `GOOGLE_APPLICATION_CREDENTIALS` | — | Path to GCP service account JSON |

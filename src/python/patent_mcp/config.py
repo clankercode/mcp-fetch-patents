@@ -92,6 +92,17 @@ class PatentConfig:
     # Activity journal (None = disabled, relative to CWD by default)
     activity_journal: Path | None = field(default_factory=lambda: Path(".patent-activity.jsonl"))
 
+    # Search settings
+    search_browser_profiles_dir: Path | None = None  # None = XDG default
+    search_browser_default_profile: str = "default"
+    search_browser_headless: bool = True
+    search_browser_timeout: float = 60.0        # navigation timeout, seconds
+    search_browser_max_pages: int = 3
+    search_browser_idle_timeout: float = 1800.0  # 30 minutes
+    search_browser_debug_html_dir: Path | None = None
+    search_backend_default: str = "browser"     # "browser" | "serpapi" | "auto"
+    search_enrich_top_n: int = 5
+
     # Misc test flags
     disable_marker: bool = True  # True = marker in converters_disabled
 
@@ -168,6 +179,28 @@ def _apply_toml(cfg: PatentConfig, data: dict[str, Any]) -> None:
         else:
             cfg.activity_journal = Path(v)
 
+    search = data.get("search", {})
+    if "browser_profiles_dir" in search:
+        v = search["browser_profiles_dir"]
+        cfg.search_browser_profiles_dir = Path(v) if v else None
+    if "browser_default_profile" in search:
+        cfg.search_browser_default_profile = search["browser_default_profile"]
+    if "browser_headless" in search:
+        cfg.search_browser_headless = bool(search["browser_headless"])
+    if "browser_timeout" in search:
+        cfg.search_browser_timeout = float(search["browser_timeout"])
+    if "browser_max_pages" in search:
+        cfg.search_browser_max_pages = int(search["browser_max_pages"])
+    if "browser_idle_timeout" in search:
+        cfg.search_browser_idle_timeout = float(search["browser_idle_timeout"])
+    if "browser_debug_html_dir" in search:
+        v = search["browser_debug_html_dir"]
+        cfg.search_browser_debug_html_dir = Path(v) if v else None
+    if "backend_default" in search:
+        cfg.search_backend_default = search["backend_default"]
+    if "enrich_top_n" in search:
+        cfg.search_enrich_top_n = int(search["enrich_top_n"])
+
     agent = data.get("agent", {})
     if "command" in agent:
         cfg.agent_command = agent["command"]
@@ -217,6 +250,37 @@ def _apply_env(cfg: PatentConfig, env: dict[str, str]) -> None:
         cfg.agent_command = v
     if v := env.get("PATENT_LOG_LEVEL"):
         cfg.log_level = v
+    # Search settings
+    if v := env.get("PATENT_SEARCH_BROWSER_PROFILES_DIR"):
+        cfg.search_browser_profiles_dir = Path(v)
+    if v := env.get("PATENT_SEARCH_BROWSER_DEFAULT_PROFILE"):
+        cfg.search_browser_default_profile = v
+    if v := env.get("PATENT_SEARCH_BROWSER_HEADLESS"):
+        cfg.search_browser_headless = _parse_bool(v)
+    if v := env.get("PATENT_SEARCH_BROWSER_TIMEOUT"):
+        try:
+            cfg.search_browser_timeout = float(v)
+        except (ValueError, TypeError):
+            pass
+    if v := env.get("PATENT_SEARCH_BROWSER_MAX_PAGES"):
+        try:
+            cfg.search_browser_max_pages = int(v)
+        except (ValueError, TypeError):
+            pass
+    if v := env.get("PATENT_SEARCH_BROWSER_IDLE_TIMEOUT"):
+        try:
+            cfg.search_browser_idle_timeout = float(v)
+        except (ValueError, TypeError):
+            pass
+    if v := env.get("PATENT_SEARCH_BROWSER_DEBUG_HTML_DIR"):
+        cfg.search_browser_debug_html_dir = Path(v)
+    if v := env.get("PATENT_SEARCH_BACKEND_DEFAULT"):
+        cfg.search_backend_default = v
+    if v := env.get("PATENT_SEARCH_ENRICH_TOP_N"):
+        try:
+            cfg.search_enrich_top_n = int(v)
+        except (ValueError, TypeError):
+            pass
 
 
 def _load_env_file_if_present(path: Path) -> None:

@@ -137,6 +137,41 @@ Cache-only metadata lookup — no network calls, instant response.
 **Parameters:** `patent_ids: string[]`
 **Returns:** `{results: [{patent_id, canonical_id, metadata}]}`
 
+## Search tools (patent-search MCP server)
+
+The search server (`python -m patent_mcp.search`) provides tools for natural language patent search, structured queries, citation chains, and research sessions.
+
+### `patent_search_natural`
+
+Search using plain English. The planner expands your description into multiple query variants using keyword/synonym expansion, runs them against Google Patents (browser and/or SerpAPI), and reranks results.
+
+**Parameters:**
+| Name | Type | Required | Description |
+|---|---|---|---|
+| `description` | `string` | Yes | Natural language description of the technology |
+| `date_cutoff` | `string` | No | ISO date — only return patents before this date |
+| `jurisdictions` | `string[]` | No | Filter by jurisdiction (e.g. `["US", "EP"]`) |
+| `session_id` | `string` | No | Auto-save results to a research session |
+| `max_results` | `int` | No | Maximum results after ranking (default 25) |
+| `backend` | `string` | No | `"browser"`, `"serpapi"`, or `"auto"` (default) |
+| `enrich_top_n` | `int` | No | Enrich top N hits with full metadata (default 5) |
+
+### Other search tools
+
+- **`patent_search_structured`** — Expert Boolean query syntax against USPTO, EPO OPS, Google Patents
+- **`patent_citation_chain`** — Follow citations forward/backward (depth 1-3)
+- **`patent_classification_search`** — Search by IPC/CPC code
+- **`patent_family_search`** — Find patent family members across jurisdictions
+- **`patent_suggest_queries`** — Generate search strategy without executing
+- **`patent_search_profile_login_start`** — Launch headed browser for Google login
+
+### Research sessions
+
+Sessions persist search results across multiple tool calls:
+- **`patent_session_create`** — Start a new research session
+- **`patent_session_load/list/note/annotate`** — Manage session state
+- **`patent_session_export`** — Generate Markdown report
+
 ## Patent ID formats
 
 Don't worry about formatting. The canonicalizer has seen it all:
@@ -201,6 +236,11 @@ All config via autoloaded env files, `~/.patents.toml`, or environment variables
 | `PATENT_BIGQUERY_PROJECT` | — | GCP project for BigQuery source |
 | `PATENT_FETCH_ALL_SOURCES` | `false` | Try all sources even after first success |
 | `PATENT_ACTIVITY_JOURNAL` | `.patent-activity.jsonl` | Per-repo activity journal (empty = disabled) |
+| `PATENT_SEARCH_BACKEND_DEFAULT` | `browser` | Default search backend (`browser`, `serpapi`, `auto`) |
+| `PATENT_SEARCH_BROWSER_HEADLESS` | `true` | Run Playwright in headless mode |
+| `PATENT_SEARCH_BROWSER_IDLE_TIMEOUT` | `1800` | Browser idle timeout in seconds (default 30 min) |
+| `PATENT_SEARCH_BROWSER_MAX_PAGES` | `3` | Max Google Patents result pages per query |
+| `PATENT_SEARCH_ENRICH_TOP_N` | `5` | Enrich top N search results with full metadata |
 
 ## Development
 

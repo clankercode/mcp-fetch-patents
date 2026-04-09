@@ -109,6 +109,16 @@ mcp-smoke-rust PATENT_ID='US10000000B2':
 mcp-smoke-rust-installed PATENT_ID='US10000000B2':
     printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fetch_patents","arguments":{"patent_ids":["{{PATENT_ID}}"],"force_refresh":true}}}' | /home/xertrov/.cargo/bin/patent-mcp-server
 
+# ── Search ────────────────────────────────────────────────────────────────────
+
+# Start the patent-search MCP server with browser backend available
+serve-search-browser:
+    pip install -e ".[browser]" 2>/dev/null; python -m patent_mcp.search
+
+# Launch a headed browser for Google login (profile persistence)
+search-login PROFILE='default':
+    python -c "from patent_mcp.search.profile_manager import ProfileManager; from patent_mcp.search.browser_manager import BrowserManager; pm = ProfileManager(); bm = BrowserManager(pm, '{{PROFILE}}', headless=False); page = bm.get_page(); page.goto('https://patents.google.com/'); input('Press Enter to close browser...'); bm.close()"
+
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
 # Show pytest test count breakdown by marker

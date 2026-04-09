@@ -480,6 +480,15 @@ mod tests {
             bing_key: None,
             bigquery_project: None,
             activity_journal: None,
+            search_browser_profiles_dir: None,
+            search_browser_default_profile: "default".into(),
+            search_browser_headless: true,
+            search_browser_timeout: 60.0,
+            search_browser_max_pages: 3,
+            search_browser_idle_timeout: 1800.0,
+            search_browser_debug_html_dir: None,
+            search_backend_default: "browser".into(),
+            search_enrich_top_n: 5,
         }
     }
 

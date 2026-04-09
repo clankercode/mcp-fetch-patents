@@ -10,32 +10,14 @@ from __future__ import annotations
 import logging
 import time
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
 import httpx
 
+from patent_mcp.search.session_manager import PatentHit  # canonical definition
+
 log = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Data model (local definition; will be imported from session_manager once built)
-# ---------------------------------------------------------------------------
-
-@dataclass
-class PatentHit:
-    patent_id: str
-    title: str | None = None
-    date: str | None = None          # ISO date string (publication or priority)
-    assignee: str | None = None
-    inventors: list[str] = field(default_factory=list)
-    abstract: str | None = None
-    source: str = ""                 # which database it came from
-    relevance: str = "unknown"       # "high" | "medium" | "low" | "unknown"
-    note: str = ""
-    prior_art: bool | None = None    # None = unknown
-    url: str | None = None           # direct URL to patent page
 
 
 # ---------------------------------------------------------------------------

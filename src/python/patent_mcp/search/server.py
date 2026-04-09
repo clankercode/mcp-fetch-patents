@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,41 @@ def _get_session_manager():
 def _get_config():
     from patent_mcp.config import get_config
     return get_config()
+
+
+# ---------------------------------------------------------------------------
+# Singletons for browser infrastructure (lazy init)
+# ---------------------------------------------------------------------------
+
+_browser_manager_lock = threading.Lock()
+_browser_managers: dict[str, object] = {}  # profile_name → BrowserManager
+
+
+def _get_browser_manager(profile_name: str | None = None):
+    """Return a shared BrowserManager for the given profile, creating it on first call."""
+    cfg = _get_config()
+    name = profile_name or cfg.search_browser_default_profile
+
+    if name in _browser_managers:
+        return _browser_managers[name]
+
+    with _browser_manager_lock:
+        if name in _browser_managers:
+            return _browser_managers[name]
+
+        from patent_mcp.search.profile_manager import ProfileManager
+        from patent_mcp.search.browser_manager import BrowserManager
+
+        pm = ProfileManager(cfg.search_browser_profiles_dir)
+        bm = BrowserManager(
+            profile_manager=pm,
+            profile_name=name,
+            headless=cfg.search_browser_headless,
+            idle_timeout=cfg.search_browser_idle_timeout,
+            timeout=cfg.search_browser_timeout * 1000,  # seconds → ms
+        )
+        _browser_managers[name] = bm
+        return bm
 
 
 # ---------------------------------------------------------------------------
@@ -208,12 +244,17 @@ def patent_search_natural(
     jurisdictions: list[str] | None = None,
     session_id: str | None = None,
     max_results: int = 25,
+    backend: str = "auto",
+    profile_name: str | None = None,
+    enrich_top_n: int | None = None,
+    debug: bool = False,
 ) -> dict[str, Any]:
     """Search for patents using a natural language description.
 
-    This tool translates your description into structured patent queries and searches
-    multiple sources simultaneously. Best for broad searches when you don't know the
-    exact patent terminology.
+    Expands your description into multiple query variants using keyword/synonym
+    expansion, runs them against Google Patents (browser and/or SerpAPI), merges
+    and reranks results, and optionally enriches the top hits with full metadata
+    from the patent fetch pipeline.
 
     Args:
         description: Natural language description of the technology or invention to search for.
@@ -223,54 +264,160 @@ def patent_search_natural(
         jurisdictions: Optional list of jurisdictions (e.g. ["US", "EP", "WO"]).
                        Default: searches all.
         session_id: Optional session ID to automatically save results.
-        max_results: Maximum results per source (default 25).
+        max_results: Maximum results to return after dedup/ranking (default 25).
+        backend: Search backend: "browser" (Playwright), "serpapi", or "auto" (default).
+                 "auto" tries browser first, falls back to SerpAPI.
+        profile_name: Browser profile name for Playwright backend (default: config value).
+        enrich_top_n: Enrich top N results with full metadata via fetch pipeline.
+                      Default: from config (typically 5). Set to 0 to disable.
+        debug: If True, save debug HTML snapshots of search result pages.
 
     Returns:
-        List of matching patents with metadata, sources searched, and queries run.
+        Ranked list of matching patents with metadata, planner output, and queries run.
     """
+    import time as _time
+    start = _time.monotonic()
+
     cfg = _get_config()
-    results = []
-    queries_run = []
+    if enrich_top_n is None:
+        enrich_top_n = cfg.search_enrich_top_n
 
-    # SerpAPI Google Patents backend
-    if cfg.serpapi_key:
-        from patent_mcp.search.searchers import SerpApiGooglePatentsBackend
-        backend = SerpApiGooglePatentsBackend(api_key=cfg.serpapi_key)
-        date_to = date_cutoff  # cutoff is the upper bound for prior art
-        hits = _run(backend.search(
-            query=description,
-            date_to=date_to,
-            max_results=max_results,
-        ))
-        results.extend(hits)
-        queries_run.append({
-            "source": "Google_Patents (SerpAPI)",
-            "query": description,
-            "date_to": date_to,
-            "result_count": len(hits),
-        })
-    else:
-        log.warning("No PATENT_SERPAPI_KEY configured — Google Patents search unavailable")
+    # Resolve "auto": determine preferred backend but keep "auto" semantics
+    # so fallback from browser→serpapi works.
+    effective_backend = backend
+    if effective_backend == "auto":
+        effective_backend = cfg.search_backend_default
+        if effective_backend == "auto":
+            effective_backend = "browser"  # ultimate default
 
-    # Deduplicate by patent_id
-    seen: set[str] = set()
-    deduped = []
-    for h in results:
-        if h.patent_id not in seen:
-            seen.add(h.patent_id)
-            deduped.append(h)
+    # Phase 1: Plan — expand description into query variants
+    from patent_mcp.search.planner import NaturalLanguagePlanner
+    planner = NaturalLanguagePlanner()
+    intent = planner.plan(description, date_cutoff, jurisdictions)
 
-    # If session_id provided, save the results
-    if session_id and deduped:
-        _save_to_session(session_id, queries_run, deduped)
+    # Phase 2: Execute queries across backends
+    hits_by_query: dict[str, list] = {}
+    queries_run: list[dict[str, Any]] = []
+    browser_failed = False
+
+    # Browser backend
+    if effective_backend == "browser":
+        try:
+            from patent_mcp.search.google_browser_backend import (
+                GooglePatentsBrowserBackend,
+                GoogleSearchConfig,
+            )
+            bm = _get_browser_manager(profile_name)
+            search_cfg = GoogleSearchConfig(
+                max_pages=cfg.search_browser_max_pages,
+                timeout_ms=cfg.search_browser_timeout * 1000,
+                debug_html_dir=Path(cfg.search_browser_debug_html_dir) if (debug and cfg.search_browser_debug_html_dir) else None,
+            )
+            gb = GooglePatentsBrowserBackend(bm, search_cfg)
+
+            for variant in intent.query_variants:
+                try:
+                    hits = gb.search(
+                        query=variant.query,
+                        date_before=date_cutoff,
+                    )
+                    hits_by_query[variant.query] = hits
+                    queries_run.append({
+                        "source": "Google_Patents_Browser",
+                        "query": variant.query,
+                        "variant_type": variant.variant_type,
+                        "result_count": len(hits),
+                    })
+                except Exception as e:
+                    log.warning("Browser search failed for variant '%s': %s", variant.variant_type, e)
+                    queries_run.append({
+                        "source": "Google_Patents_Browser",
+                        "query": variant.query,
+                        "variant_type": variant.variant_type,
+                        "result_count": 0,
+                        "error": str(e),
+                    })
+        except Exception as e:
+            log.warning("Browser backend unavailable: %s", e)
+            browser_failed = True
+
+    # SerpAPI fallback — triggered when backend is "serpapi", or "auto" and browser failed/empty
+    if effective_backend == "serpapi" or (backend == "auto" and (browser_failed or not hits_by_query)):
+        if cfg.serpapi_key:
+            from patent_mcp.search.searchers import SerpApiGooglePatentsBackend
+            serp = SerpApiGooglePatentsBackend(api_key=cfg.serpapi_key)
+            for variant in intent.query_variants:
+                if variant.query in hits_by_query and hits_by_query[variant.query]:
+                    continue  # already have results for this query
+                try:
+                    hits = _run(serp.search(
+                        query=variant.query,
+                        date_to=date_cutoff,
+                        max_results=max_results,
+                    ))
+                    hits_by_query[variant.query] = hits
+                    queries_run.append({
+                        "source": "Google_Patents_SerpAPI",
+                        "query": variant.query,
+                        "variant_type": variant.variant_type,
+                        "result_count": len(hits),
+                    })
+                except Exception as e:
+                    log.warning("SerpAPI search failed for variant '%s': %s", variant.variant_type, e)
+        else:
+            if not hits_by_query:
+                log.warning("No search backends available (browser failed, no SerpAPI key)")
+
+    # Phase 3: Rank
+    from patent_mcp.search.ranking import SearchRanker
+    ranker = SearchRanker()
+    scored = ranker.rank(hits_by_query, intent)
+
+    # Limit to max_results
+    scored = scored[:max_results]
+
+    # Phase 4: Enrich top N with full metadata
+    enriched_ids: list[str] = []
+    if enrich_top_n > 0 and scored:
+        enriched_ids = _enrich_hits(scored[:enrich_top_n])
+
+    # Phase 5: Save to session
+    all_hits = [s.hit for s in scored]
+    if session_id and all_hits:
+        _save_to_session(
+            session_id, queries_run, all_hits,
+            metadata={
+                "search_mode": backend,
+                "planner_concepts": intent.concepts,
+                "planner_synonyms": {k: v for k, v in intent.synonyms.items()},
+                "query_variants": [v.query for v in intent.query_variants],
+            },
+        )
+
+    elapsed_ms = int((_time.monotonic() - start) * 1000)
 
     return {
         "query": description,
         "date_cutoff": date_cutoff,
-        "sources_searched": [q["source"] for q in queries_run],
+        "backend": backend,
+        "planner": {
+            "concepts": intent.concepts,
+            "synonyms_expanded": list(intent.synonyms.keys()),
+            "query_variant_count": len(intent.query_variants),
+            "rationale": intent.rationale,
+        },
         "queries_run": queries_run,
-        "total_found": len(deduped),
-        "results": [_hit_to_dict(h) for h in deduped],
+        "total_found": len(scored),
+        "enriched_ids": enriched_ids,
+        "results": [
+            {
+                **_hit_to_dict(s.hit),
+                "score": round(s.score, 2),
+                "query_matches": s.query_matches,
+            }
+            for s in scored
+        ],
+        "elapsed_ms": elapsed_ms,
     }
 
 
@@ -549,13 +696,8 @@ def patent_suggest_queries(
 ) -> dict[str, Any]:
     """Generate search strategy suggestions for a patent research topic.
 
-    This tool brainstorms search approaches WITHOUT running them. Use it to plan your
-    research before executing queries. It suggests:
-    - Keywords and synonyms to include
-    - IPC/CPC classification codes to explore
-    - Boolean query templates for different databases
-    - Historical terminology for old patents
-    - Which sources to prioritize
+    This tool brainstorms search approaches WITHOUT running them. It now uses the
+    NL planner to generate concrete query variants alongside general strategy advice.
 
     Args:
         topic: The technology or invention to research (natural language description).
@@ -564,59 +706,45 @@ def patent_suggest_queries(
         prior_art_cutoff: Optional date for prior art (ISO format YYYY-MM-DD).
 
     Returns:
-        A structured set of search strategy recommendations.
+        A structured set of search strategy recommendations plus concrete query variants.
     """
-    # This is a static advisory tool — no API calls needed
-    # Returns structured guidance based on the topic
+    # Use the planner to generate concrete query variants
+    from patent_mcp.search.planner import NaturalLanguagePlanner
+    planner = NaturalLanguagePlanner()
+    intent = planner.plan(topic, date_cutoff=prior_art_cutoff)
 
     suggestions = {
         "topic": topic,
         "context": context,
         "prior_art_cutoff": prior_art_cutoff,
+        "planner_output": {
+            "concepts": intent.concepts,
+            "synonyms": intent.synonyms,
+            "rationale": intent.rationale,
+            "query_variants": [
+                {
+                    "query": v.query,
+                    "type": v.variant_type,
+                    "rationale": v.rationale,
+                }
+                for v in intent.query_variants
+            ],
+        },
         "strategy": {
-            "step_1_concept_expansion": {
-                "description": "Expand your topic into synonyms and alternative phrasings before searching",
-                "tips": [
-                    f"Think about how '{topic}' was described 20, 50, 100 years ago",
-                    "List technical synonyms from different industries (e.g., 'electromagnetic induction' = 'wireless power' = 'contactless charging')",
-                    "Include verb forms: 'charging' vs 'power transfer' vs 'energy transmission'",
-                ],
+            "step_1_natural_search": {
+                "description": "Run patent_search_natural with the query variants above",
+                "action": f'patent_search_natural(description="{topic[:80]}", backend="auto")',
             },
             "step_2_classification": {
                 "description": "Find IPC/CPC class codes — searches by class find patents regardless of keyword",
-                "action": "Use patent_classification_search with codes from H01/H02/H03/H04 (electrical), G06 (computing), B (mechanical), C (chemistry), A (medical)",
+                "action": "Use patent_classification_search with codes from the relevant technology area",
                 "tip": "Start with a broad code like 'H02J' and explore subclasses",
             },
-            "step_3_multi_source": {
-                "description": "Search at least 3 sources",
-                "recommended_sources": [
-                    "USPTO (best for US full-text, expert Boolean syntax with field codes)",
-                    "EPO_OPS (best for classification search, worldwide coverage, families)",
-                    "Google_Patents (widest coverage, includes pre-1976 and non-English)",
-                ],
-            },
-            "step_4_citation_chain": {
-                "description": "After finding any relevant patent, ALWAYS follow its citations",
+            "step_3_citation_chain": {
+                "description": "After finding any relevant patent, follow its citations",
                 "action": "Use patent_citation_chain on the most relevant results (direction='both', depth=2)",
                 "why": "The best prior art is often found 1-2 hops away in citation chains",
             },
-            "recommended_queries": [
-                {
-                    "type": "Broad keyword (USPTO)",
-                    "template": f"TTL/({topic[:30]}) OR ABST/({topic[:30]})",
-                    "note": "Start broad, then narrow",
-                },
-                {
-                    "type": "Claims-focused (USPTO)",
-                    "template": f"ACLM/({topic[:30].replace(' ', ' AND ')})",
-                    "note": "Claims language matters most for prior art",
-                },
-                {
-                    "type": "Natural language (Google Patents via SerpAPI)",
-                    "template": topic,
-                    "note": "Best for initial broad search",
-                },
-            ],
         },
     }
 
@@ -628,6 +756,92 @@ def patent_suggest_queries(
         }
 
     return suggestions
+
+
+# ---------------------------------------------------------------------------
+# Profile tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def patent_search_profile_login_start(
+    name: str = "default",
+) -> dict[str, Any]:
+    """Launch a headed browser for manual Google login.
+
+    Opens a visible Chromium window using an isolated browser profile. Log into
+    your Google account manually, then close the browser window. Subsequent
+    headless searches will reuse the saved login state.
+
+    Args:
+        name: Profile name (default: "default"). Creates the profile if it doesn't exist.
+
+    Returns:
+        Status message with instructions.
+    """
+    from patent_mcp.search.profile_manager import ProfileManager, ProfileBusyError
+
+    cfg = _get_config()
+    pm = ProfileManager(cfg.search_browser_profiles_dir)
+
+    # Check if profile is busy
+    locked, lock_info = pm.is_locked(name)
+    if locked and lock_info:
+        return {
+            "error": f"Profile '{name}' is busy ({lock_info.purpose}, pid={lock_info.pid}). "
+                     f"Close the existing browser or wait for the search to finish.",
+        }
+
+    # Launch headed browser in background thread
+    profile_dir = pm.get_profile_dir(name)
+
+    def _run_login_browser():
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError:
+            log.error("Playwright not installed. Run: pip install patent-mcp-server[browser]")
+            return
+
+        pm.acquire_lock(name, "login")
+        try:
+            pw = sync_playwright().start()
+            context = pw.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                headless=False,  # always headed for login
+                viewport={"width": 1280, "height": 900},
+            )
+            # Navigate to Google Patents
+            page = context.new_page()
+            page.goto("https://patents.google.com/", wait_until="networkidle")
+
+            # Block until the user closes the browser window
+            try:
+                context.wait_for_event("close", timeout=0)
+            except Exception:
+                pass
+
+            try:
+                context.close()
+            except Exception:
+                pass
+            pw.stop()
+        except Exception as e:
+            log.error("Login browser error: %s", e)
+        finally:
+            pm.release_lock(name)
+
+    t = threading.Thread(target=_run_login_browser, daemon=True, name=f"login-{name}")
+    t.start()
+
+    return {
+        "status": "launched",
+        "profile": name,
+        "profile_dir": str(profile_dir),
+        "message": (
+            f"Headed browser launched with profile '{name}'. "
+            f"Log into Google manually, then close the browser window. "
+            f"Subsequent searches will reuse the saved login state."
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -647,11 +861,16 @@ def _hit_to_dict(hit) -> dict[str, Any]:
         "relevance": hit.relevance,
         "note": hit.note,
         "prior_art": hit.prior_art,
-        "url": getattr(hit, "url", None),
+        "url": hit.url,
     }
 
 
-def _save_to_session(session_id: str, queries_run: list[dict], hits: list) -> None:
+def _save_to_session(
+    session_id: str,
+    queries_run: list[dict],
+    hits: list,
+    metadata: dict[str, Any] | None = None,
+) -> None:
     """Save query results to a session."""
     from patent_mcp.search.session_manager import QueryRecord
     sm = _get_session_manager()
@@ -668,10 +887,60 @@ def _save_to_session(session_id: str, queries_run: list[dict], hits: list) -> No
                 query_text=q.get("query", q.get("code", "")),
                 result_count=q.get("result_count", len(q_hits)),
                 results=q_hits,
+                metadata=metadata if i == 0 else None,
             )
             sm.append_query_result(session_id, record)
     except Exception as e:
         log.warning("Failed to save results to session %s: %s", session_id, e)
+
+
+def _enrich_hits(scored_hits: list) -> list[str]:
+    """Enrich top hits with metadata from the fetch pipeline. Returns enriched IDs."""
+    enriched_ids: list[str] = []
+    try:
+        from patent_mcp.id_canon import canonicalize
+        from patent_mcp.config import load_config
+        from patent_mcp.fetchers.orchestrator import FetcherOrchestrator
+
+        cfg = load_config()
+        orchestrator = FetcherOrchestrator(cfg)
+
+        patent_ids = []
+        for sh in scored_hits:
+            cid = canonicalize(sh.hit.patent_id)
+            if cid.canonical:
+                patent_ids.append(cid)
+
+        if not patent_ids:
+            return []
+
+        output_base = cfg.cache_local_dir
+        results = _run(orchestrator.fetch_batch(
+            patent_ids, output_base, concurrency=3,
+        ))
+
+        # Merge metadata back into scored hits
+        result_map = {r.canonical_id: r for r in results if r.success and r.metadata}
+        for sh in scored_hits:
+            cid = canonicalize(sh.hit.patent_id)
+            r = result_map.get(cid.canonical)
+            if r and r.metadata:
+                meta = r.metadata
+                if not sh.hit.title and hasattr(meta, "title"):
+                    sh.hit.title = meta.title
+                if not sh.hit.abstract and hasattr(meta, "abstract"):
+                    sh.hit.abstract = getattr(meta, "abstract", None)
+                if not sh.hit.assignee and hasattr(meta, "assignee"):
+                    sh.hit.assignee = meta.assignee
+                if not sh.hit.inventors and hasattr(meta, "inventors"):
+                    sh.hit.inventors = meta.inventors or []
+                if not sh.hit.date and hasattr(meta, "publication_date"):
+                    sh.hit.date = meta.publication_date
+                enriched_ids.append(cid.canonical)
+    except Exception as e:
+        log.warning("Enrichment failed: %s", e)
+
+    return enriched_ids
 
 
 def _now_iso() -> str:
