@@ -1,10 +1,11 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use reqwest::Client;
 use tracing::warn;
 
+use crate::cache::SessionCache;
 use crate::ranking::PatentHit;
 
 fn validate_path_segment(input: &str, label: &str) -> Result<()> {
@@ -321,6 +322,7 @@ pub struct EpoOpsSearchBackend {
     base_url: String,
     auth_url: String,
     token_state: Mutex<TokenState>,
+    session_cache: Option<Arc<SessionCache>>,
     client: Client,
 }
 
@@ -331,6 +333,7 @@ impl EpoOpsSearchBackend {
         base_url: Option<String>,
         timeout: Duration,
         client: Option<Client>,
+        session_cache: Option<Arc<SessionCache>>,
     ) -> Self {
         let base = base_url
             .unwrap_or_else(|| "https://ops.epo.org/3.2/rest-services".to_string());
@@ -350,6 +353,7 @@ impl EpoOpsSearchBackend {
                 token: None,
                 expires_at: None,
             }),
+            session_cache,
             client: client.unwrap_or_else(|| {
                 Client::builder()
                     .timeout(timeout)
@@ -369,7 +373,11 @@ impl EpoOpsSearchBackend {
             None => return Ok(None),
         };
 
-        {
+        if let Some(ref sc) = self.session_cache {
+            if let Some(cached) = sc.get("EPO_OPS") {
+                return Ok(Some(cached));
+            }
+        } else {
             let state = self.token_state.lock().unwrap_or_else(|e| e.into_inner());
             if let (Some(ref token), Some(expires_at)) = (&state.token, state.expires_at) {
                 if Instant::now() < expires_at - Duration::from_secs(60) {
@@ -421,9 +429,14 @@ impl EpoOpsSearchBackend {
             .unwrap_or(1800);
 
         if let Some(ref t) = token {
-            let mut state = self.token_state.lock().unwrap_or_else(|e| e.into_inner());
-            state.token = Some(t.clone());
-            state.expires_at = Some(Instant::now() + Duration::from_secs(expires_in as u64));
+            if let Some(ref sc) = self.session_cache {
+                let expires_at = chrono::Utc::now() + chrono::Duration::seconds(expires_in);
+                sc.set_with_expiry("EPO_OPS", t, expires_at);
+            } else {
+                let mut state = self.token_state.lock().unwrap_or_else(|e| e.into_inner());
+                state.token = Some(t.clone());
+                state.expires_at = Some(Instant::now() + Duration::from_secs(expires_in as u64));
+            }
         }
 
         Ok(token)
@@ -1528,7 +1541,7 @@ mod tests {
 
     #[test]
     fn epo_ops_constructor_default_urls() {
-        let backend = EpoOpsSearchBackend::new(None, None, None, Duration::from_secs(30), None);
+        let backend = EpoOpsSearchBackend::new(None, None, None, Duration::from_secs(30), None, None);
         assert_eq!(
             backend.base_url,
             "https://ops.epo.org/3.2/rest-services"
@@ -1547,6 +1560,7 @@ mod tests {
             Some("https://custom.epo.org/rest-services".to_string()),
             Duration::from_secs(30),
             None,
+            None,
         );
         assert_eq!(backend.base_url, "https://custom.epo.org/rest-services");
         assert_eq!(
@@ -1563,6 +1577,7 @@ mod tests {
             Some("https://custom.epo.org/api".to_string()),
             Duration::from_secs(30),
             None,
+            None,
         );
         assert_eq!(backend.auth_url, "https://custom.epo.org/api/auth/accesstoken");
     }
@@ -1571,7 +1586,7 @@ mod tests {
     fn epo_ops_get_oauth_token_no_credentials() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let backend = EpoOpsSearchBackend::new(None, None, None, Duration::from_secs(30), None);
+            let backend = EpoOpsSearchBackend::new(None, None, None, Duration::from_secs(30), None, None);
             let token = backend.get_oauth_token().await.unwrap();
             assert!(token.is_none());
         });

@@ -1,5 +1,8 @@
 """Cross-impl parity: web search query generation and URL scoring match."""
+
 import pytest
+
+pytest.importorskip("httpx")
 
 from patent_mcp.fetchers.web_search import generate_queries, score_url_confidence
 from patent_mcp.id_canon import canonicalize
@@ -28,13 +31,24 @@ class TestWebSearchParity:
         assert any("PCT international patent" in q for q in queries)
 
     def test_confidence_scoring_high(self):
-        assert score_url_confidence("https://patents.google.com/patent/US7654321", "US7654321") == "high"
+        assert (
+            score_url_confidence(
+                "https://patents.google.com/patent/US7654321", "US7654321"
+            )
+            == "high"
+        )
 
     def test_confidence_scoring_id_in_url(self):
-        assert score_url_confidence("https://random.com/US7654321/page", "US7654321") == "high"
+        assert (
+            score_url_confidence("https://random.com/US7654321/page", "US7654321")
+            == "high"
+        )
 
     def test_confidence_scoring_medium(self):
-        assert score_url_confidence("https://patentyogi.com/article", "US7654321") == "medium"
+        assert (
+            score_url_confidence("https://patentyogi.com/article", "US7654321")
+            == "medium"
+        )
 
     def test_confidence_scoring_low(self):
         assert score_url_confidence("https://example.com/article", "US7654321") == "low"

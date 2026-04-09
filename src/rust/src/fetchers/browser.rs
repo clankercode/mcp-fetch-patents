@@ -1,7 +1,8 @@
 //! Native Google Patents fetcher using HTML + JSON-LD.
 
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Instant;
 
 use async_trait::async_trait;
 use reqwest::Client;
@@ -12,12 +13,9 @@ use crate::config::PatentConfig;
 use crate::fetchers::{FetchResult, PatentSource};
 use crate::id_canon::CanonicalPatentId;
 
-const DEFAULT_USER_AGENT: &str = concat!(
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ",
-    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 patent-mcp-server/0.1"
-);
-
-pub struct BrowserSource;
+pub struct BrowserSource {
+    pub client: Arc<Client>,
+}
 
 #[async_trait]
 impl PatentSource for BrowserSource {
@@ -33,32 +31,11 @@ impl PatentSource for BrowserSource {
         &self,
         patent: &CanonicalPatentId,
         _output_dir: &Path,
-        config: &PatentConfig,
+        _config: &PatentConfig,
     ) -> FetchResult {
         let start = Instant::now();
         let url = format!("https://patents.google.com/patent/{}/en", patent.canonical);
-        let client = match Client::builder()
-            .timeout(Duration::from_secs(config.timeout_secs as u64))
-            .redirect(reqwest::redirect::Policy::limited(10))
-            .user_agent(DEFAULT_USER_AGENT)
-            .build()
-        {
-            Ok(client) => client,
-            Err(error) => {
-                return FetchResult {
-                    source_attempt: SourceAttempt {
-                        source: "Google_Patents".to_string(),
-                        success: false,
-                        elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
-                        error: Some(format!("Client build error: {}", error)),
-                        metadata: None,
-                    },
-                    pdf_path: None,
-                    txt_path: None,
-                    metadata: None,
-                };
-            }
-        };
+        let client = self.client.clone();
 
         let response = match client
             .get(&url)

@@ -274,6 +274,35 @@ def patent_session_export(
         return {"error": f"Session '{session_id}' not found.", "isError": True}
 
 
+@mcp.tool()
+def patent_session_delete(session_id: str) -> dict[str, Any]:
+    """Delete a patent research session and all its data.
+
+    Args:
+        session_id: ID of the session to delete.
+
+    Returns:
+        Confirmation of deletion or not-found status.
+    """
+    sm = _get_session_manager()
+    try:
+        deleted = sm.delete_session(session_id)
+        if deleted:
+            return {
+                "status": "deleted",
+                "session_id": session_id,
+                "isError": False,
+            }
+        return {
+            "status": "not_found",
+            "message": f"Session '{session_id}' not found.",
+            "session_id": session_id,
+            "isError": False,
+        }
+    except ValueError as e:
+        return {"error": str(e), "isError": True}
+
+
 # ---------------------------------------------------------------------------
 # Search tools
 # ---------------------------------------------------------------------------

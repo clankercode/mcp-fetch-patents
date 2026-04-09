@@ -17,11 +17,6 @@ use crate::config::PatentConfig;
 use crate::fetchers::{FetchResult, PatentSource};
 use crate::id_canon::CanonicalPatentId;
 
-const DEFAULT_USER_AGENT: &str = concat!(
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ",
-    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 patent-mcp-server/0.1"
-);
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -70,7 +65,9 @@ fn metadata_has_useful_fields(meta: &PatentMetadata) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Espacenet — scrape HTML for metadata + PDF links.
-pub struct EspacenetSource;
+pub struct EspacenetSource {
+    pub client: Arc<Client>,
+}
 
 #[async_trait]
 impl PatentSource for EspacenetSource {
@@ -93,17 +90,7 @@ impl PatentSource for EspacenetSource {
         let source = self.source_name();
 
         let url = format!("{}/patent/{}", base, patent.canonical);
-        let client = match Client::builder()
-            .timeout(Duration::from_secs(config.timeout_secs as u64))
-            .redirect(reqwest::redirect::Policy::limited(10))
-            .user_agent(DEFAULT_USER_AGENT)
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                return fail_result(source, &format!("Client build error: {}", e));
-            }
-        };
+        let client = self.client.clone();
 
         let resp = match client
             .get(&url)
@@ -190,7 +177,9 @@ impl PatentSource for EspacenetSource {
 // ---------------------------------------------------------------------------
 
 /// WIPO PatentScope — scrape for WO (PCT) patent data.
-pub struct WipoScrapeSource;
+pub struct WipoScrapeSource {
+    pub client: Arc<Client>,
+}
 
 #[async_trait]
 impl PatentSource for WipoScrapeSource {
@@ -225,14 +214,7 @@ impl PatentSource for WipoScrapeSource {
         };
 
         let url = format!("{}/search/en/detail.jsf?docId={}", base, wo_id);
-        let client = match Client::builder()
-            .timeout(Duration::from_secs(config.timeout_secs as u64))
-            .redirect(reqwest::redirect::Policy::limited(10))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => return fail_result(source, &format!("Client build error: {}", e)),
-        };
+        let client = self.client.clone();
 
         let resp = match client.get(&url).send().await {
             Ok(r) => r,
@@ -304,7 +286,9 @@ impl PatentSource for WipoScrapeSource {
 // ---------------------------------------------------------------------------
 
 /// CIPO — scrape Canadian patent database (falls back to Google Patents).
-pub struct CipoScrapeSource;
+pub struct CipoScrapeSource {
+    pub client: Arc<Client>,
+}
 
 #[async_trait]
 impl PatentSource for CipoScrapeSource {
@@ -327,14 +311,7 @@ impl PatentSource for CipoScrapeSource {
         let source = self.source_name();
 
         let url = format!("{}/patent/{}", base, patent.canonical);
-        let client = match Client::builder()
-            .timeout(Duration::from_secs(config.timeout_secs as u64))
-            .redirect(reqwest::redirect::Policy::limited(10))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => return fail_result(source, &format!("Client build error: {}", e)),
-        };
+        let client = self.client.clone();
 
         let resp = match client.get(&url).send().await {
             Ok(r) => r,
@@ -406,7 +383,9 @@ impl PatentSource for CipoScrapeSource {
 // ---------------------------------------------------------------------------
 
 /// IP Australia AusPat REST API.
-pub struct IpAustraliaSource;
+pub struct IpAustraliaSource {
+    pub client: Arc<Client>,
+}
 
 #[async_trait]
 impl PatentSource for IpAustraliaSource {
@@ -433,13 +412,7 @@ impl PatentSource for IpAustraliaSource {
         let source = self.source_name();
 
         let url = format!("{}/ols/auspat/api/v1/applications/{}", base, patent.number);
-        let client = match Client::builder()
-            .timeout(Duration::from_secs(config.timeout_secs as u64))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => return fail_result(source, &format!("Client build error: {}", e)),
-        };
+        let client = self.client.clone();
 
         let resp = match client
             .get(&url)
@@ -534,10 +507,10 @@ impl PatentSource for IpAustraliaSource {
 /// USPTO PPUBS — US full-text patents, session cookie auth.
 pub struct PpubsSource {
     pub session_cache: Arc<SessionCache>,
+    pub client: Arc<Client>,
 }
 
 impl PpubsSource {
-    /// Acquire or refresh the PPUBS session token.
     async fn get_session_token(&self, config: &PatentConfig) -> Option<String> {
         if let Some(cached) = self.session_cache.get("PPUBS") {
             return Some(cached);
@@ -545,13 +518,13 @@ impl PpubsSource {
         let base = base_url(config, "USPTO", "https://ppubs.uspto.gov");
         let url = format!("{}/ppubs-api/v1/session", base);
 
-        let client = Client::builder()
+        match self.client
+            .post(&url)
             .timeout(Duration::from_secs(30))
-            .user_agent(DEFAULT_USER_AGENT)
-            .build()
-            .ok()?;
-
-        match client.post(&url).json(&serde_json::json!({})).send().await {
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+        {
             Ok(resp) => {
                 if !resp.status().is_success() {
                     warn!("PPUBS session establishment failed: HTTP {}", resp.status());
@@ -598,14 +571,7 @@ impl PatentSource for PpubsSource {
         let source = self.source_name();
 
         let token = self.get_session_token(config).await;
-        let client = match Client::builder()
-            .timeout(Duration::from_secs(config.timeout_secs as u64))
-            .user_agent(DEFAULT_USER_AGENT)
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => return fail_result(source, &format!("Client build error: {}", e)),
-        };
+        let client = self.client.clone();
 
         // Search for patent
         let search_url = format!("{}/ppubs-api/v1/patent", base);
@@ -763,10 +729,10 @@ impl PatentSource for PpubsSource {
 /// EPO Open Patent Services — bibliographic data + PDF for 100+ offices.
 pub struct EpoOpsSource {
     pub session_cache: Arc<SessionCache>,
+    pub client: Arc<Client>,
 }
 
 impl EpoOpsSource {
-    /// Acquire or refresh the EPO OPS OAuth2 token.
     async fn get_token(&self, config: &PatentConfig) -> Option<String> {
         let (client_id, client_secret) = match (&config.epo_client_id, &config.epo_client_secret) {
             (Some(id), Some(secret)) => (id.clone(), secret.clone()),
@@ -780,19 +746,19 @@ impl EpoOpsSource {
         let base = base_url(config, "EPO_OPS", "https://ops.epo.org");
         let url = format!("{}/3.2/auth/accesstoken", base);
 
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .user_agent(DEFAULT_USER_AGENT)
-            .build()
-            .ok()?;
-
         let form_data = [
             ("grant_type", "client_credentials".to_string()),
             ("client_id", client_id),
             ("client_secret", client_secret),
         ];
 
-        let resp = match client.post(&url).form(&form_data).send().await {
+        let resp = match self.client
+            .post(&url)
+            .timeout(Duration::from_secs(30))
+            .form(&form_data)
+            .send()
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 warn!("EPO OPS token request failed: {}", e);
@@ -997,14 +963,7 @@ impl PatentSource for EpoOpsSource {
         let source = self.source_name();
 
         let token = self.get_token(config).await;
-        let client = match Client::builder()
-            .timeout(Duration::from_secs(config.timeout_secs as u64))
-            .user_agent(DEFAULT_USER_AGENT)
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => return fail_result(source, &format!("Client build error: {}", e)),
-        };
+        let client = self.client.clone();
 
         let mut headers = reqwest::header::HeaderMap::new();
         if let Some(ref t) = token {
@@ -1391,9 +1350,13 @@ mod tests {
         }
     }
 
+    fn test_client() -> Arc<Client> {
+        Arc::new(Client::builder().build().unwrap())
+    }
+
     #[test]
     fn test_espacenet_can_fetch_all_jurisdictions() {
-        let source = EspacenetSource;
+        let source = EspacenetSource { client: test_client() };
         let us_patent = crate::id_canon::canonicalize("US7654321");
         let ep_patent = crate::id_canon::canonicalize("EP1234567");
         assert!(source.can_fetch(&us_patent));
@@ -1402,7 +1365,7 @@ mod tests {
 
     #[test]
     fn test_wipo_only_handles_wo() {
-        let source = WipoScrapeSource;
+        let source = WipoScrapeSource { client: test_client() };
         let wo_patent = crate::id_canon::canonicalize("WO2024123456");
         let us_patent = crate::id_canon::canonicalize("US7654321");
         assert!(source.can_fetch(&wo_patent));
@@ -1411,7 +1374,7 @@ mod tests {
 
     #[test]
     fn test_ip_australia_only_handles_au() {
-        let source = IpAustraliaSource;
+        let source = IpAustraliaSource { client: test_client() };
         let au_patent = crate::id_canon::canonicalize("AU2023123456");
         let us_patent = crate::id_canon::canonicalize("US7654321");
         assert!(source.can_fetch(&au_patent));
@@ -1420,7 +1383,7 @@ mod tests {
 
     #[test]
     fn test_cipo_only_handles_ca() {
-        let source = CipoScrapeSource;
+        let source = CipoScrapeSource { client: test_client() };
         let ca_patent = crate::id_canon::canonicalize("CA1234567");
         let us_patent = crate::id_canon::canonicalize("US7654321");
         assert!(source.can_fetch(&ca_patent));
@@ -1431,6 +1394,7 @@ mod tests {
     fn test_epo_ops_can_fetch_all() {
         let source = EpoOpsSource {
             session_cache: Arc::new(SessionCache::new()),
+            client: test_client(),
         };
         let us_patent = crate::id_canon::canonicalize("US7654321");
         assert!(source.can_fetch(&us_patent));
@@ -1440,6 +1404,7 @@ mod tests {
     fn test_ppubs_only_handles_us() {
         let source = PpubsSource {
             session_cache: Arc::new(SessionCache::new()),
+            client: test_client(),
         };
         let us_patent = crate::id_canon::canonicalize("US7654321");
         let ep_patent = crate::id_canon::canonicalize("EP1234567");

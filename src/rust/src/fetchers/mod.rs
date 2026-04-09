@@ -10,14 +10,21 @@ pub mod web_search;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
+use reqwest::Client;
 use tracing::debug;
 
 use crate::cache::{ArtifactSet, PatentCache, PatentMetadata, SessionCache, SourceAttempt};
 use crate::config::PatentConfig;
 use crate::converters::ConverterPipeline;
 use crate::id_canon::CanonicalPatentId;
+
+const DEFAULT_USER_AGENT: &str = concat!(
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ",
+    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 patent-mcp-server/0.1"
+);
 
 fn merge_metadata(existing: &mut Option<PatentMetadata>, incoming: Option<PatentMetadata>) {
     let Some(incoming) = incoming else {
@@ -108,49 +115,74 @@ pub struct FetcherOrchestrator {
     config: PatentConfig,
     cache: PatentCache,
     sources: Vec<Box<dyn PatentSource>>,
+    client: Arc<Client>,
+    session_cache: Arc<SessionCache>,
 }
 
 impl FetcherOrchestrator {
     pub fn new(config: PatentConfig, cache: PatentCache) -> Self {
         let session_cache = Arc::new(SessionCache::new());
-        let sources = Self::build_sources(&config, session_cache);
+        let client = Arc::new(
+            Client::builder()
+                .timeout(Duration::from_secs(config.timeout_secs as u64))
+                .redirect(reqwest::redirect::Policy::limited(10))
+                .user_agent(DEFAULT_USER_AGENT)
+                .build()
+                .unwrap_or_else(|_| Client::new()),
+        );
+        let sources = Self::build_sources(&config, session_cache.clone(), client.clone());
         FetcherOrchestrator {
             config,
             cache,
             sources,
+            client,
+            session_cache,
         }
     }
 
-    /// Build all available sources in config priority order.
-    /// Mirrors Python FetcherOrchestrator._build_sources().
+    pub fn session_cache(&self) -> Arc<SessionCache> {
+        self.session_cache.clone()
+    }
+
     fn build_sources(
         config: &PatentConfig,
         session_cache: Arc<SessionCache>,
+        client: Arc<Client>,
     ) -> Vec<Box<dyn PatentSource>> {
         use crate::fetchers::http::*;
         use crate::fetchers::browser::BrowserSource;
 
-        // All available sources keyed by their config name
         let mut all_sources: Vec<(&str, Box<dyn PatentSource>)> = vec![
             (
                 "USPTO",
                 Box::new(PpubsSource {
+                    client: client.clone(),
                     session_cache: session_cache.clone(),
                 }),
             ),
             (
                 "EPO_OPS",
                 Box::new(EpoOpsSource {
+                    client: client.clone(),
                     session_cache: session_cache.clone(),
                 }),
             ),
             ("BigQuery", Box::new(BigQuerySource)),
-            ("Espacenet", Box::new(EspacenetSource)),
-            ("WIPO_Scrape", Box::new(WipoScrapeSource)),
-            ("IP_Australia", Box::new(IpAustraliaSource)),
-            ("CIPO", Box::new(CipoScrapeSource)),
-            ("Google_Patents", Box::new(BrowserSource)),
-            // Note: web_search is handled separately as a last resort
+            ("Espacenet", Box::new(EspacenetSource {
+                client: client.clone(),
+            })),
+            ("WIPO_Scrape", Box::new(WipoScrapeSource {
+                client: client.clone(),
+            })),
+            ("IP_Australia", Box::new(IpAustraliaSource {
+                client: client.clone(),
+            })),
+            ("CIPO", Box::new(CipoScrapeSource {
+                client: client.clone(),
+            })),
+            ("Google_Patents", Box::new(BrowserSource {
+                client: client.clone(),
+            })),
         ];
 
         // Order by config.source_priority
@@ -259,7 +291,7 @@ impl FetcherOrchestrator {
                 patent.canonical
             );
             let ws_result =
-                web_search::WebSearchFallbackSource::fetch(patent, output_dir, &self.config).await;
+                web_search::WebSearchFallbackSource::fetch(patent, output_dir, &self.config, self.client.clone()).await;
             all_attempts.push(ws_result.source_attempt.clone());
             if ws_result.source_attempt.success {
                 if let Some(p) = ws_result.pdf_path {
@@ -672,6 +704,7 @@ mod tests {
         let orch = FetcherOrchestrator {
             config: cfg,
             cache,
+            client: Arc::new(Client::new()),
             sources: vec![
                 Box::new(StubSource {
                     name: "sparse",
@@ -684,6 +717,7 @@ mod tests {
                     result: rich,
                 }),
             ],
+            session_cache: Arc::new(SessionCache::new()),
         };
 
         let patent = crate::id_canon::canonicalize("US7654321");
@@ -714,7 +748,9 @@ mod tests {
         let orch = FetcherOrchestrator {
             config: cfg,
             cache,
+            client: Arc::new(Client::new()),
             sources: vec![],
+            session_cache: Arc::new(SessionCache::new()),
         };
 
         let patent = crate::id_canon::canonicalize("US10000000");

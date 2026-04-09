@@ -311,6 +311,31 @@ fn tools_list() -> Value {
                 }
             },
             {
+                "name": "patent_session_delete",
+                "description": "Delete a patent research session and all its data.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "session_id": {"type": "string", "description": "ID of the session to delete."}
+                    },
+                    "required": ["session_id"]
+                }
+            },
+            {
+                "name": "patent_quick_search",
+                "description": "One-shot patent search: creates a session, runs natural-language search, enriches top results, and returns a summary. Combines patent_session_create + patent_search_natural into a single call.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "description": {"type": "string", "description": "Natural-language description of what you're looking for."},
+                        "max_results": {"type": "integer", "description": "Max results to return. Default: 10."},
+                        "prior_art_cutoff": {"type": "string", "description": "ISO date (YYYY-MM-DD). If set, highlights patents before this date as prior art."},
+                        "backend": {"type": "string", "default": "auto", "description": "Search backend: \"browser\", \"serpapi\", or \"auto\"."}
+                    },
+                    "required": ["description"]
+                }
+            },
+            {
                 "name": "patent_search_profile_login_start",
                 "description": "Launch a headed browser for manual Google login. Opens a visible Chromium window using an isolated browser profile. Log into your Google account manually, then close the browser window. Subsequent headless searches will reuse the saved login state.",
                 "inputSchema": {
@@ -559,6 +584,51 @@ struct SearchBackends {
     epo: crate::search::searchers::EpoOpsSearchBackend,
     session_manager: crate::search::session_manager::SessionManager,
     browser_config: BrowserBackendConfig,
+}
+
+impl SearchBackends {
+    fn new(config: &PatentConfig, epo_session_cache: Option<std::sync::Arc<crate::cache::SessionCache>>) -> Self {
+        Self::with_sessions_dir(config, epo_session_cache, None)
+    }
+
+    fn with_sessions_dir(
+        config: &PatentConfig,
+        epo_session_cache: Option<std::sync::Arc<crate::cache::SessionCache>>,
+        sessions_dir: Option<std::path::PathBuf>,
+    ) -> Self {
+        SearchBackends {
+            serpapi: config.serpapi_key.as_ref().map(|key| {
+                crate::search::searchers::SerpApiGooglePatentsBackend::new(
+                    key.clone(),
+                    None,
+                    std::time::Duration::from_secs_f64(config.timeout_secs),
+                    None,
+                )
+            }),
+            uspto: crate::search::searchers::UsptoTextSearchBackend::new(
+                None,
+                std::time::Duration::from_secs_f64(config.timeout_secs),
+                None,
+            ),
+            epo: crate::search::searchers::EpoOpsSearchBackend::new(
+                config.epo_client_id.clone(),
+                config.epo_client_secret.clone(),
+                None,
+                std::time::Duration::from_secs_f64(config.timeout_secs),
+                None,
+                epo_session_cache,
+            ),
+            session_manager: crate::search::session_manager::SessionManager::new(sessions_dir),
+            browser_config: BrowserBackendConfig {
+                profiles_dir: config.search_browser_profiles_dir.clone(),
+                profile_name: config.search_browser_default_profile.clone(),
+                headless: config.search_browser_headless,
+                timeout_ms: (config.search_browser_timeout * 1000.0) as u32,
+                max_pages: config.search_browser_max_pages as u32,
+                debug_html_dir: config.search_browser_debug_html_dir.clone(),
+            },
+        }
+    }
 }
 
 #[tracing::instrument(skip_all)]
@@ -1299,6 +1369,194 @@ async fn execute_tool_call(
             }
         }
 
+        "patent_session_delete" => {
+            let session_id = get_str_param(&params, "session_id").unwrap_or_default();
+
+            let sm = &backends.session_manager;
+            match sm.delete_session(&session_id).await {
+                Ok(true) => {
+                    let payload = serde_json::json!({
+                        "status": "deleted",
+                        "session_id": session_id,
+                    });
+                    RpcResponse::ok(id, serde_json::json!({
+                        "content": [{"type": "text", "text": payload.to_string()}],
+                        "isError": false
+                    }))
+                }
+                Ok(false) => {
+                    let payload = serde_json::json!({
+                        "status": "not_found",
+                        "message": format!("Session '{}' not found.", session_id),
+                        "session_id": session_id,
+                    });
+                    RpcResponse::ok(id, serde_json::json!({
+                        "content": [{"type": "text", "text": payload.to_string()}],
+                        "isError": false
+                    }))
+                }
+                Err(e) => tool_error(id, &format!("Delete error: {}", e)),
+            }
+        }
+
+        "patent_quick_search" => {
+            let description = get_str_param(&params, "description").unwrap_or_default();
+            if description.trim().is_empty() {
+                return tool_error(id, "description is required and must be non-empty");
+            }
+            let max_results = get_int_param(&params, "max_results").unwrap_or(10) as usize;
+            let prior_art_cutoff = get_str_param(&params, "prior_art_cutoff");
+            let backend = get_str_param(&params, "backend").unwrap_or_else(|| "auto".to_string());
+
+            let sm = &backends.session_manager;
+            let session = match sm.create_session(
+                &description,
+                prior_art_cutoff.as_deref(),
+                "",
+            ).await {
+                Ok(s) => s,
+                Err(e) => return tool_error(id, &format!("Session create error: {}", e)),
+            };
+            let session_id = session.session_id.clone();
+
+            let start = std::time::Instant::now();
+
+            let planner = crate::planner::NaturalLanguagePlanner;
+            let intent = planner.plan(
+                &description,
+                prior_art_cutoff.as_deref(),
+                None,
+            );
+
+            let mut hits_by_query: std::collections::HashMap<String, Vec<crate::ranking::PatentHit>> =
+                std::collections::HashMap::new();
+            let mut queries_run: Vec<Value> = Vec::new();
+
+            let effective_backend = if backend == "auto" {
+                config.search_backend_default.clone()
+            } else {
+                backend.clone()
+            };
+
+            if effective_backend == "browser" || effective_backend == "auto" {
+                let browser_cfg = &backends.browser_config;
+                let browser = crate::search::browser_search::GooglePatentsBrowserSearch::new(
+                    browser_cfg.profiles_dir.clone(),
+                    &browser_cfg.profile_name,
+                    browser_cfg.headless,
+                    browser_cfg.timeout_ms,
+                    browser_cfg.max_pages,
+                    None,
+                );
+                for variant in &intent.query_variants {
+                    if hits_by_query.contains_key(&variant.query) {
+                        continue;
+                    }
+                    match browser.search(
+                        &variant.query,
+                        prior_art_cutoff.as_deref(),
+                        None,
+                        max_results,
+                    ).await {
+                        Ok(hits) if !hits.is_empty() => {
+                            let count = hits.len();
+                            queries_run.push(serde_json::json!({
+                                "source": "Google_Patents_Browser",
+                                "query": variant.query,
+                                "variant_type": variant.variant_type,
+                                "result_count": count,
+                            }));
+                            hits_by_query.insert(variant.query.clone(), hits);
+                        }
+                        Ok(_) | Err(_) => {}
+                    }
+                }
+            }
+
+            let original_backend = backend.as_str();
+            if effective_backend == "serpapi" ||
+               (effective_backend == "auto") ||
+               (original_backend == "auto" && hits_by_query.is_empty()) {
+                if let Some(ref serp) = backends.serpapi {
+                    let serp_variants: Vec<_> = intent.query_variants.iter()
+                        .filter(|v| !hits_by_query.contains_key(&v.query))
+                        .collect();
+                    let serp_futures: Vec<_> = serp_variants.iter()
+                        .map(|variant| serp.search(
+                            &variant.query, None, prior_art_cutoff.as_deref(), None, None, None, max_results,
+                        ))
+                        .collect();
+                    let serp_results = futures::future::join_all(serp_futures).await;
+                    for (variant, result) in serp_variants.iter().zip(serp_results) {
+                        let hits = result.unwrap_or_else(|e| { warn!("SerpAPI search failed: {}", e); vec![] });
+                        let count = hits.len();
+                        queries_run.push(serde_json::json!({
+                            "source": "Google_Patents_SerpAPI",
+                            "query": variant.query,
+                            "variant_type": variant.variant_type,
+                            "result_count": count,
+                        }));
+                        hits_by_query.insert(variant.query.clone(), hits);
+                    }
+                }
+            }
+
+            let ranker = crate::ranking::SearchRanker;
+            let mut scored = ranker.rank(&hits_by_query, &intent);
+            scored.truncate(max_results);
+
+            let all_hits: Vec<&crate::ranking::PatentHit> = scored.iter().map(|s| &s.hit).collect();
+            if !all_hits.is_empty() {
+                let _ = append_search_to_session(
+                    &backends.session_manager,
+                    &session_id,
+                    &description,
+                    "quick_search",
+                    &all_hits,
+                    Some(serde_json::json!({
+                        "search_mode": backend,
+                        "planner_concepts": intent.concepts,
+                        "planner_synonyms": intent.synonyms,
+                        "query_variants": intent.query_variants.iter().map(|v| &v.query).collect::<Vec<_>>(),
+                    })),
+                    None,
+                ).await;
+            }
+
+            let payload = serde_json::json!({
+                "session_id": session_id,
+                "topic": description,
+                "backend": backend,
+                "prior_art_cutoff": prior_art_cutoff,
+                "elapsed_ms": start.elapsed().as_millis() as u64,
+                "total_found": scored.len(),
+                "planner": {
+                    "concepts": intent.concepts,
+                    "query_variants": intent.query_variants.iter().map(|v| serde_json::json!({
+                        "query": v.query,
+                        "type": v.variant_type,
+                    })).collect::<Vec<_>>(),
+                },
+                "results": scored.iter().map(|s| serde_json::json!({
+                    "patent_id": s.hit.patent_id,
+                    "title": s.hit.title,
+                    "date": s.hit.date,
+                    "assignee": s.hit.assignee,
+                    "inventors": s.hit.inventors,
+                    "abstract": s.hit.abstract_text,
+                    "source": s.hit.source,
+                    "relevance": s.hit.relevance,
+                    "url": s.hit.url,
+                    "score": (s.score * 100.0).round() / 100.0,
+                })).collect::<Vec<_>>(),
+            });
+
+            RpcResponse::ok(id, serde_json::json!({
+                "content": [{"type": "text", "text": payload.to_string()}],
+                "isError": false
+            }))
+        }
+
         "patent_search_profile_login_start" => {
             let profile_name = get_str_param(&params, "name").unwrap_or_else(|| "default".to_string());
             let browser_cfg = &backends.browser_config;
@@ -1394,37 +1652,7 @@ pub async fn run_server(config: PatentConfig) -> Result<()> {
 
     tracing::info!("patent-mcp-server started (Rust implementation)");
 
-    let backends = SearchBackends {
-        serpapi: config.serpapi_key.as_ref().map(|key| {
-            crate::search::searchers::SerpApiGooglePatentsBackend::new(
-                key.clone(),
-                None,
-                std::time::Duration::from_secs_f64(config.timeout_secs),
-                None,
-            )
-        }),
-        uspto: crate::search::searchers::UsptoTextSearchBackend::new(
-            None,
-            std::time::Duration::from_secs_f64(config.timeout_secs),
-            None,
-        ),
-        epo: crate::search::searchers::EpoOpsSearchBackend::new(
-            config.epo_client_id.clone(),
-            config.epo_client_secret.clone(),
-            None,
-            std::time::Duration::from_secs_f64(config.timeout_secs),
-            None,
-        ),
-        session_manager: crate::search::session_manager::SessionManager::new(None),
-        browser_config: BrowserBackendConfig {
-            profiles_dir: config.search_browser_profiles_dir.clone(),
-            profile_name: config.search_browser_default_profile.clone(),
-            headless: config.search_browser_headless,
-            timeout_ms: (config.search_browser_timeout * 1000.0) as u32,
-            max_pages: config.search_browser_max_pages as u32,
-            debug_html_dir: config.search_browser_debug_html_dir.clone(),
-        },
-    };
+    let backends = SearchBackends::new(&config, Some(orchestrator.session_cache()));
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<String>(64);
     std::thread::spawn(move || {
@@ -1513,6 +1741,7 @@ fn handle_line(line: &str, _config: &PatentConfig) -> Option<RpcResponse> {
                 }
                 "patent_session_create" | "patent_session_load" | "patent_session_list"
                 | "patent_session_note" | "patent_session_annotate" | "patent_session_export"
+                | "patent_session_delete" | "patent_quick_search"
                 | "patent_search_profile_login_start" => {
                     RpcResponse::ok(id, serde_json::json!({
                         "content": [{"type": "text", "text": serde_json::json!({"status": "ok"}).to_string()}],
@@ -1616,6 +1845,8 @@ mod tests {
             "patent_session_note",
             "patent_session_annotate",
             "patent_session_export",
+            "patent_session_delete",
+            "patent_quick_search",
             "patent_search_profile_login_start",
         ];
         assert_eq!(names.len(), expected.len(), "Expected {} tools, got {}: {:?}", expected.len(), names.len(), names);
@@ -1881,39 +2112,11 @@ mod tests {
         let orchestrator = crate::fetchers::FetcherOrchestrator::new(config.clone(), orch_cache);
         let journal = crate::journal::ActivityJournal::new(config.activity_journal.clone());
         let sessions_tmp = tempfile::tempdir().unwrap();
-        let backends = SearchBackends {
-            serpapi: config.serpapi_key.as_ref().map(|key| {
-                crate::search::searchers::SerpApiGooglePatentsBackend::new(
-                    key.clone(),
-                    None,
-                    std::time::Duration::from_secs(30),
-                    None,
-                )
-            }),
-            uspto: crate::search::searchers::UsptoTextSearchBackend::new(
-                None,
-                std::time::Duration::from_secs(30),
-                None,
-            ),
-            epo: crate::search::searchers::EpoOpsSearchBackend::new(
-                config.epo_client_id.clone(),
-                config.epo_client_secret.clone(),
-                None,
-                std::time::Duration::from_secs(30),
-                None,
-            ),
-            session_manager: crate::search::session_manager::SessionManager::new(Some(
-                sessions_tmp.path().to_path_buf(),
-            )),
-            browser_config: BrowserBackendConfig {
-                profiles_dir: None,
-                profile_name: "default".to_string(),
-                headless: true,
-                timeout_ms: 60000,
-                max_pages: 3,
-                debug_html_dir: None,
-            },
-        };
+        let backends = SearchBackends::with_sessions_dir(
+            &config,
+            Some(orchestrator.session_cache()),
+            Some(sessions_tmp.path().to_path_buf()),
+        );
         (config, cache, orchestrator, journal, backends, sessions_tmp)
     }
 

@@ -1,11 +1,16 @@
 """Tests for patent_mcp.fetchers.web_search — T01-T06."""
+
 from __future__ import annotations
 
 from pathlib import Path
 from unittest.mock import patch
 
-import httpx
 import pytest
+
+pytest.importorskip("httpx")
+pytest.importorskip("respx")
+
+import httpx
 import respx
 
 from patent_mcp.config import load_config
@@ -41,6 +46,7 @@ def _wo():
 # T01 — Query generation
 # ---------------------------------------------------------------------------
 
+
 class TestQueryGeneration:
     def test_query_generation_us(self):
         queries = generate_queries(_us())
@@ -66,6 +72,7 @@ class TestQueryGeneration:
 # T02 — URL confidence scoring
 # ---------------------------------------------------------------------------
 
+
 class TestUrlConfidence:
     def test_confidence_high_when_id_in_url(self):
         url = "https://patents.google.com/patent/US7654321"
@@ -89,6 +96,7 @@ class TestUrlConfidence:
 # ---------------------------------------------------------------------------
 # T03 — DuckDuckGo backend
 # ---------------------------------------------------------------------------
+
 
 class TestDuckDuckGoBackend:
     @pytest.mark.asyncio
@@ -117,7 +125,9 @@ class TestDuckDuckGoBackend:
 
         with respx.mock:
             respx.get("http://mock-ddg/").mock(
-                return_value=httpx.Response(200, json={"Results": [], "RelatedTopics": []})
+                return_value=httpx.Response(
+                    200, json={"Results": [], "RelatedTopics": []}
+                )
             )
             urls = await ddg.search("US7654321 patent")
 
@@ -128,6 +138,7 @@ class TestDuckDuckGoBackend:
 # T04 — Result assembly
 # ---------------------------------------------------------------------------
 
+
 class TestWebSearchFallbackResult:
     @pytest.mark.asyncio
     async def test_fallback_result_schema(self, tmp_path):
@@ -136,10 +147,15 @@ class TestWebSearchFallbackResult:
 
         with respx.mock:
             respx.get("http://mock-ddg/").mock(
-                return_value=httpx.Response(200, json={
-                    "Results": [{"FirstURL": "https://patents.google.com/patent/US7654321"}],
-                    "RelatedTopics": [],
-                })
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "Results": [
+                            {"FirstURL": "https://patents.google.com/patent/US7654321"}
+                        ],
+                        "RelatedTopics": [],
+                    },
+                )
             )
             result = await src.fetch(_us(), tmp_path)
 
@@ -155,7 +171,9 @@ class TestWebSearchFallbackResult:
 
         with respx.mock:
             respx.get("http://mock-ddg/").mock(
-                return_value=httpx.Response(200, json={"Results": [], "RelatedTopics": []})
+                return_value=httpx.Response(
+                    200, json={"Results": [], "RelatedTopics": []}
+                )
             )
             result = await src.fetch(_us(), tmp_path)
 
@@ -168,6 +186,7 @@ class TestWebSearchFallbackResult:
 # ---------------------------------------------------------------------------
 # T05 — SerpAPI backend
 # ---------------------------------------------------------------------------
+
 
 class TestSerpApiBackend:
     @pytest.mark.asyncio
@@ -194,6 +213,7 @@ class TestSerpApiBackend:
 # T06 — Never writes files
 # ---------------------------------------------------------------------------
 
+
 class TestFallbackNoArtifacts:
     @pytest.mark.asyncio
     async def test_fallback_returns_no_artifacts(self, tmp_path):
@@ -202,7 +222,9 @@ class TestFallbackNoArtifacts:
 
         with respx.mock:
             respx.get("http://mock-ddg/").mock(
-                return_value=httpx.Response(200, json={"Results": [], "RelatedTopics": []})
+                return_value=httpx.Response(
+                    200, json={"Results": [], "RelatedTopics": []}
+                )
             )
             result = await src.fetch(_us(), tmp_path)
 

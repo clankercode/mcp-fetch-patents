@@ -335,6 +335,40 @@ class SessionManager:
         if updated:
             self.save_session(session)
 
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a session file and remove it from the index. Returns True if deleted."""
+        path = self._resolve_and_check(session_id)
+        if not path.exists():
+            return False
+        path.unlink()
+        self._remove_from_index(session_id)
+        return True
+
+    def _remove_from_index(self, session_id: str) -> None:
+        """Remove a session from .index.json (atomic, thread-safe)."""
+        index_path = self._dir / ".index.json"
+        lock = _get_index_lock(self._dir)
+
+        with lock:
+            if not index_path.exists():
+                return
+            try:
+                data = json.loads(index_path.read_text(encoding="utf-8"))
+                entries = data.get("sessions", [])
+                before = len(entries)
+                entries = [s for s in entries if s.get("session_id") != session_id]
+                if len(entries) < before:
+                    content = json.dumps(
+                        {"sessions": entries}, indent=2, ensure_ascii=False
+                    )
+                    tmp_path = index_path.with_name(
+                        f".index.json.{threading.get_ident()}.tmp"
+                    )
+                    tmp_path.write_text(content, encoding="utf-8")
+                    tmp_path.rename(index_path)
+            except (json.JSONDecodeError, KeyError):
+                pass
+
     def export_markdown(
         self,
         session_id: str,

@@ -85,6 +85,8 @@ src/rust/src/
 - `patent_session_create` / `list` / `load` / `export` — session management
 - `patent_session_note` — add timestamped notes to sessions
 - `patent_session_annotate` — annotate sessions
+- `patent_session_delete` — delete a session
+- `patent_quick_search` — one-shot search with auto session
 - `patent_search_profile_login_start` — launch browser for profile login
 
 ## Python Search Server

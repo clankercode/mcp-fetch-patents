@@ -3,6 +3,7 @@
 
 use std::collections::HashSet;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
 use reqwest::Client;
@@ -148,13 +149,12 @@ fn extract_domain(url: &str) -> String {
 struct DuckDuckGoBackend;
 
 impl DuckDuckGoBackend {
-    async fn search(config: &PatentConfig, query: &str) -> Vec<String> {
+    async fn search(client: &Client, config: &PatentConfig, query: &str) -> Vec<String> {
         let base = config
             .source_base_urls
             .get("DDG")
             .map(|s| s.as_str())
             .unwrap_or("https://api.duckduckgo.com/");
-        let client = Client::new();
         match client
             .get(base)
             .query(&[("q", query), ("format", "json"), ("no_html", "1")])
@@ -212,7 +212,7 @@ impl DuckDuckGoBackend {
 struct SerpApiBackend;
 
 impl SerpApiBackend {
-    async fn search(config: &PatentConfig, query: &str) -> Vec<String> {
+    async fn search(client: &Client, config: &PatentConfig, query: &str) -> Vec<String> {
         let api_key = match &config.serpapi_key {
             Some(k) => k,
             None => return vec![],
@@ -222,7 +222,6 @@ impl SerpApiBackend {
             .get("SerpAPI")
             .map(|s| s.as_str())
             .unwrap_or("https://serpapi.com/search");
-        let client = Client::new();
         match client
             .get(base)
             .query(&[
@@ -283,16 +282,16 @@ impl WebSearchFallbackSource {
         patent: &CanonicalPatentId,
         _output_dir: &Path,
         config: &PatentConfig,
+        client: Arc<Client>,
     ) -> FetchResult {
         let start = Instant::now();
         let queries = generate_queries(patent);
 
         let mut all_urls = Vec::new();
-        // Limit to first 2 queries (matches Python)
         for q in queries.iter().take(2) {
-            let urls = DuckDuckGoBackend::search(config, q).await;
+            let urls = DuckDuckGoBackend::search(&client, config, q).await;
             if urls.is_empty() && config.serpapi_key.is_some() {
-                let fallback_urls = SerpApiBackend::search(config, q).await;
+                let fallback_urls = SerpApiBackend::search(&client, config, q).await;
                 all_urls.extend(fallback_urls);
             } else {
                 all_urls.extend(urls);

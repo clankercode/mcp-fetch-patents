@@ -287,6 +287,42 @@ impl SessionManager {
         Ok(())
     }
 
+    pub async fn delete_session(&self, session_id: &str) -> Result<bool> {
+        let dir = self.dir.clone();
+        let id = session_id.to_string();
+        tokio::task::spawn_blocking(move || -> Result<bool> {
+            validate_session_id(&id)?;
+            let path = dir.join(format!("{}.json", id));
+            if !path.exists() {
+                return Ok(false);
+            }
+            let canonical_dir = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+            let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if !canonical_path.starts_with(&canonical_dir) {
+                anyhow::bail!("Session ID escapes sessions directory: {}", id);
+            }
+            fs::remove_file(&path)
+                .with_context(|| format!("Failed to delete session file: {}", path.display()))?;
+            let index_path = dir.join(".index.json");
+            if index_path.exists() {
+                if let Ok(data) = fs::read_to_string(&index_path) {
+                    if let Ok(mut idx) = serde_json::from_str::<IndexFile>(&data) {
+                        let before = idx.sessions.len();
+                        idx.sessions.retain(|s| s.session_id != id);
+                        if idx.sessions.len() < before {
+                            let content = serde_json::to_string_pretty(&idx)?;
+                            let tmp_path = dir.join(".index.json.tmp");
+                            let _ = fs::write(&tmp_path, &content);
+                            let _ = fs::rename(&tmp_path, &index_path);
+                        }
+                    }
+                }
+            }
+            Ok(true)
+        })
+        .await?
+    }
+
     pub async fn annotate_patent(
         &self,
         session_id: &str,
