@@ -14,10 +14,10 @@ name = "patent_mcp"
 path = "src/lib.rs"
 
 [dependencies]
-tokio = { version = "1.38", features = ["full"] }
+tokio = { version = "1.38", features = ["rt-multi-thread", "macros", "sync", "time", "process", "io-util"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-reqwest = { version = "0.13", features = ["json", "stream", "blocking", "query", "form"] }
+reqwest = { version = "0.13", features = ["json", "blocking", "query", "form"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
 toml = "1.0"
 dirs = "6.0"
@@ -40,4 +40,3 @@ quick-xml = "0.39"
 
 [dev-dependencies]
 tempfile = "3.10"
-tokio-test = "0.4"

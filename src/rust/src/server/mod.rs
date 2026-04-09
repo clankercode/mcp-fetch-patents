@@ -148,6 +148,8 @@ fn tools_list() -> Value {
                         "patent_ids": {
                             "type": "array",
                             "items": {"type": "string"},
+                            "minItems": 1,
+                            "maxItems": 200,
                             "description": "Patent IDs in any common format."
                         },
                         "force_refresh": {
@@ -161,8 +163,8 @@ fn tools_list() -> Value {
                         },
                         "formats": {
                             "type": "array",
-                            "items": {"type": "string"},
-                            "description": "Output formats to generate (e.g. [\"pdf\", \"txt\", \"md\"]). Default: all available formats."
+                            "items": {"type": "string", "enum": ["pdf", "txt", "md"]},
+                            "description": "Output formats to generate. Default: all available formats."
                         }
                     },
                     "required": ["patent_ids"]
@@ -181,7 +183,10 @@ fn tools_list() -> Value {
                     "properties": {
                         "patent_ids": {
                             "type": "array",
-                            "items": {"type": "string"}
+                            "items": {"type": "string"},
+                            "minItems": 1,
+                            "maxItems": 200,
+                            "description": "Patent IDs to look up (e.g. [\"US7654321\", \"EP1234567B1\"])."
                         }
                     },
                     "required": ["patent_ids"]
@@ -193,12 +198,12 @@ fn tools_list() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "description": {"type": "string", "description": "Natural language description of the technology or invention."},
-                        "date_cutoff": {"type": "string", "description": "Optional ISO date — only return patents before this date."},
+                        "description": {"type": "string", "minLength": 1, "description": "Natural language description of the technology or invention."},
+                        "date_cutoff": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "Optional ISO date — only return patents before this date."},
                         "jurisdictions": {"type": "array", "items": {"type": "string"}, "description": "Optional jurisdiction filter (e.g. [\"US\", \"EP\"])."},
                         "session_id": {"type": "string", "description": "Optional session ID to save results."},
-                        "max_results": {"type": "integer", "default": 25, "description": "Maximum results after ranking."},
-                        "backend": {"type": "string", "default": "auto", "description": "Search backend: \"browser\", \"serpapi\", or \"auto\"."},
+                        "max_results": {"type": "integer", "default": 25, "minimum": 1, "maximum": 100, "description": "Maximum results after ranking."},
+                        "backend": {"type": "string", "default": "auto", "enum": ["auto", "browser", "serpapi"], "description": "Search backend."},
                         "enrich_top_n": {"type": "integer", "description": "Enrich top N results with full metadata. Default: 5. Set to 0 to disable."},
                         "profile_name": {"type": "string", "description": "Browser profile to use for browser-backed search."},
                         "debug": {"type": "boolean", "default": false, "description": "If true, save debug HTML snapshots of search result pages."}
@@ -212,12 +217,12 @@ fn tools_list() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "query": {"type": "string", "description": "Boolean query string with field codes."},
-                        "sources": {"type": "array", "items": {"type": "string"}, "description": "Sources to query. Options: \"USPTO\", \"EPO_OPS\", \"Google_Patents\"."},
-                        "date_from": {"type": "string", "description": "Start date filter (YYYY-MM-DD)."},
-                        "date_to": {"type": "string", "description": "End date filter (YYYY-MM-DD)."},
+                        "query": {"type": "string", "minLength": 1, "description": "Boolean query string with field codes."},
+                        "sources": {"type": "array", "items": {"type": "string", "enum": ["USPTO", "EPO_OPS", "Google_Patents"]}, "description": "Sources to query."},
+                        "date_from": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "Start date filter (YYYY-MM-DD)."},
+                        "date_to": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "End date filter (YYYY-MM-DD)."},
                         "session_id": {"type": "string", "description": "Optional session ID to automatically save results."},
-                        "max_results": {"type": "integer", "default": 25, "description": "Maximum results per source (default 25)."}
+                        "max_results": {"type": "integer", "default": 25, "minimum": 1, "maximum": 100, "description": "Maximum results per source (default 25)."}
                     },
                     "required": ["query"]
                 }
@@ -228,9 +233,9 @@ fn tools_list() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "patent_id": {"type": "string", "description": "Seed patent ID."},
-                        "direction": {"type": "string", "default": "backward", "description": "\"backward\", \"forward\", or \"both\"."},
-                        "depth": {"type": "integer", "default": 1, "description": "Citation depth (1-2). Depth 2 follows citations of citations."},
+                        "patent_id": {"type": "string", "minLength": 1, "description": "Seed patent ID."},
+                        "direction": {"type": "string", "default": "backward", "enum": ["backward", "forward", "both"], "description": "Citation direction."},
+                        "depth": {"type": "integer", "default": 1, "minimum": 1, "maximum": 2, "description": "Citation depth (1-2)."},
                         "session_id": {"type": "string", "description": "Optional session ID to save the citation tree."}
                     },
                     "required": ["patent_id"]
@@ -242,7 +247,7 @@ fn tools_list() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "code": {"type": "string", "description": "IPC/CPC classification code (e.g. \"H02J50\")."},
+                        "code": {"type": "string", "minLength": 1, "description": "IPC/CPC classification code (e.g. \"H02J50\")."},
                         "include_subclasses": {"type": "boolean", "default": true, "description": "If true, includes all sub-codes under this code (e.g. H02J50 includes H02J50/10, H02J50/20, etc.)."},
                         "date_from": {"type": "string", "description": "Start date filter (YYYY-MM-DD)."},
                         "date_to": {"type": "string", "description": "End date filter (YYYY-MM-DD)."},
@@ -270,7 +275,7 @@ fn tools_list() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "topic": {"type": "string", "description": "Technology or invention to research."},
+                        "topic": {"type": "string", "minLength": 1, "description": "Technology or invention to research."},
                         "context": {"type": "string", "description": "Additional context."},
                         "prior_art_cutoff": {"type": "string", "description": "Prior art date cutoff (YYYY-MM-DD)."}
                     },
@@ -283,7 +288,7 @@ fn tools_list() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "topic": {"type": "string", "description": "Brief description of the research topic (used for session naming)."},
+                        "topic": {"type": "string", "minLength": 1, "description": "Brief description of the research topic (used for session naming)."},
                         "prior_art_cutoff": {"type": "string", "description": "ISO date (YYYY-MM-DD) — if set, the strategy guide highlights patents before this date as prior art."},
                         "notes": {"type": "string", "default": "", "description": "Optional initial notes for the session."}
                     },
@@ -332,7 +337,7 @@ fn tools_list() -> Value {
                         "session_id": {"type": "string", "description": "The session containing the patent."},
                         "patent_id": {"type": "string", "description": "The patent ID to annotate (e.g. \"US10123456B2\")."},
                         "annotation": {"type": "string", "description": "Researcher note about why this patent is relevant/irrelevant."},
-                        "relevance": {"type": "string", "description": "\"high\", \"medium\", \"low\", or \"unknown\""}
+                        "relevance": {"type": "string", "enum": ["high", "medium", "low", "unknown"], "default": "unknown", "description": "Relevance assessment."}
                     },
                     "required": ["session_id", "patent_id", "annotation", "relevance"]
                 }
@@ -366,10 +371,10 @@ fn tools_list() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "description": {"type": "string", "description": "Natural-language description of what you're looking for."},
-                        "max_results": {"type": "integer", "description": "Max results to return. Default: 10."},
-                        "prior_art_cutoff": {"type": "string", "description": "ISO date (YYYY-MM-DD). If set, highlights patents before this date as prior art."},
-                        "backend": {"type": "string", "default": "auto", "description": "Search backend: \"browser\", \"serpapi\", or \"auto\"."}
+                        "description": {"type": "string", "minLength": 1, "description": "Natural-language description of what you're looking for."},
+                        "max_results": {"type": "integer", "default": 10, "minimum": 1, "maximum": 100, "description": "Max results to return."},
+                        "prior_art_cutoff": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "ISO date (YYYY-MM-DD). If set, highlights patents before this date as prior art."},
+                        "backend": {"type": "string", "default": "auto", "enum": ["auto", "browser", "serpapi"], "description": "Search backend."}
                     },
                     "required": ["description"]
                 }
@@ -768,7 +773,7 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
 
             if let Some(ref sid) = session_id {
                 if !all_hits.is_empty() {
-                    let _ = append_search_to_session(
+                    if let Err(e) = append_search_to_session(
                         &ctx.backends.session_manager,
                         sid,
                         &description,
@@ -781,7 +786,8 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                             "query_variants": result.intent.query_variants.iter().map(|v| &v.query).collect::<Vec<_>>(),
                         })),
                         None,
-                    ).await;
+                    ).await
+                    { warn!("Session append failed: {}", e); }
                 }
             }
 
@@ -929,7 +935,7 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
 
             if let Some(ref sid) = session_id {
                 if !deduped.is_empty() {
-                    let _ = append_search_to_session(
+                    if let Err(e) = append_search_to_session(
                         &ctx.backends.session_manager,
                         sid,
                         &query,
@@ -940,7 +946,10 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                         })),
                         None,
                     )
-                    .await;
+                    .await
+                    {
+                        warn!("Session append failed: {}", e);
+                    }
                 }
             }
 
@@ -1086,7 +1095,9 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                         session.citation_chains =
                             serde_json::json!({patent_id_for_session: citations_snapshot});
                     }
-                    let _ = sm.save_session(&mut session).await;
+                    if let Err(e) = sm.save_session(&mut session).await {
+                        warn!("Session save failed: {}", e);
+                    }
                 }
             }
 
@@ -1126,7 +1137,7 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
             if let Some(ref sid) = session_id {
                 if !hits.is_empty() {
                     let hit_refs: Vec<&crate::ranking::PatentHit> = hits.iter().collect();
-                    let _ = append_search_to_session(
+                    if let Err(e) = append_search_to_session(
                         &ctx.backends.session_manager,
                         sid,
                         &code,
@@ -1138,7 +1149,10 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                         })),
                         Some(std::slice::from_ref(&code)),
                     )
-                    .await;
+                    .await
+                    {
+                        warn!("Session append failed: {}", e);
+                    }
                 }
             }
 
@@ -1186,7 +1200,9 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                                 })
                                 .collect(),
                         );
-                        let _ = sm.save_session(&mut session).await;
+                        if let Err(e) = sm.save_session(&mut session).await {
+                            warn!("Session save failed: {}", e);
+                        }
                     }
                 }
             }
@@ -1461,7 +1477,7 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
             let all_hits: Vec<&crate::ranking::PatentHit> =
                 result.scored.iter().map(|s| &s.hit).collect();
             if !all_hits.is_empty() {
-                let _ = append_search_to_session(
+                if let Err(e) = append_search_to_session(
                     &ctx.backends.session_manager,
                     &session_id,
                     &description,
@@ -1474,7 +1490,8 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                         "query_variants": result.intent.query_variants.iter().map(|v| &v.query).collect::<Vec<_>>(),
                     })),
                     None,
-                ).await;
+                ).await
+                    { warn!("Session append failed: {}", e); }
             }
 
             let payload = serde_json::json!({
