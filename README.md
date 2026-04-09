@@ -228,7 +228,7 @@ All config via autoloaded env files, `~/.patents.toml`, or environment variables
 | Env var | Default | Description |
 |---|---|---|
 | `PATENT_CACHE_DIR` | `~/.local/share/patent-cache/patents` | Cache directory for patent files |
-| `PATENT_CONCURRENCY` | `5` | Max concurrent fetches |
+| `PATENT_CONCURRENCY` | `10` | Max concurrent fetches |
 | `PATENT_TIMEOUT` | `30.0` | HTTP timeout (seconds) |
 | `PATENT_EPO_KEY` | — | EPO OPS `client_id:client_secret` |
 | `PATENT_LENS_KEY` | — | Lens.org API key |

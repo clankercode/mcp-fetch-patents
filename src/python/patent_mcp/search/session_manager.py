@@ -3,6 +3,7 @@
 Manages patent research sessions on disk with atomic JSON persistence.
 Session files live in a configurable directory (default: .patent-sessions/).
 """
+
 from __future__ import annotations
 
 import json
@@ -32,26 +33,27 @@ def _get_index_lock(directory: Path) -> threading.Lock:
 # Data model
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class PatentHit:
     patent_id: str
     title: str | None = None
-    date: str | None = None        # ISO date string (publication or priority)
+    date: str | None = None  # ISO date string (publication or priority)
     assignee: str | None = None
     inventors: list[str] = field(default_factory=list)
     abstract: str | None = None
-    source: str = ""               # which database it came from
-    relevance: str = "unknown"     # "high" | "medium" | "low" | "unknown"
-    note: str = ""                 # researcher annotation
+    source: str = ""  # which database it came from
+    relevance: str = "unknown"  # "high" | "medium" | "low" | "unknown"
+    note: str = ""  # researcher annotation
     prior_art: bool | None = None  # None = unknown, True/False = determined
-    url: str | None = None         # direct link to patent page
+    url: str | None = None  # direct link to patent page
 
 
 @dataclass
 class QueryRecord:
-    query_id: str           # "q001", "q002", etc.
-    timestamp: str          # ISO8601
-    source: str             # "USPTO" | "EPO_OPS" | "Google_Patents" | etc.
+    query_id: str  # "q001", "q002", etc.
+    timestamp: str  # ISO8601
+    source: str  # "USPTO" | "EPO_OPS" | "Google_Patents" | etc.
     query_text: str
     result_count: int
     results: list[PatentHit]
@@ -62,13 +64,13 @@ class QueryRecord:
 class Session:
     session_id: str
     topic: str
-    created_at: str         # ISO8601
-    modified_at: str        # ISO8601
+    created_at: str  # ISO8601
+    modified_at: str  # ISO8601
     prior_art_cutoff: str | None  # ISO date, e.g. "2020-01-01"
     notes: str
     queries: list[QueryRecord]
     classifications_explored: list[str]  # IPC/CPC codes like ["H02J50", "H01F38"]
-    citation_chains: dict[str, Any]      # patent_id -> {forward: [...], backward: [...]}
+    citation_chains: dict[str, Any]  # patent_id -> {forward: [...], backward: [...]}
     patent_families: dict[str, list[str]]  # patent_id -> [family_members]
 
 
@@ -85,6 +87,7 @@ class SessionSummary:
 # ---------------------------------------------------------------------------
 # Serialisation helpers
 # ---------------------------------------------------------------------------
+
 
 def _session_to_dict(session: Session) -> dict[str, Any]:
     """Convert Session (and nested dataclasses) to a plain dict."""
@@ -154,9 +157,22 @@ def _count_unique_patents(session: Session) -> int:
     return len(seen)
 
 
+def _validate_session_id(session_id: str) -> None:
+    if not session_id:
+        raise ValueError("Session ID cannot be empty")
+    if (
+        "/" in session_id
+        or "\\" in session_id
+        or ".." in session_id
+        or "\0" in session_id
+    ):
+        raise ValueError(f"Invalid session ID: {session_id!r}")
+
+
 # ---------------------------------------------------------------------------
 # SessionManager
 # ---------------------------------------------------------------------------
+
 
 class SessionManager:
     def __init__(self, sessions_dir: Path | str | None = None):
@@ -206,6 +222,7 @@ class SessionManager:
 
     def load_session(self, session_id: str) -> Session:
         """Load a session by ID. Raises FileNotFoundError if not found."""
+        _validate_session_id(session_id)
         path = self._dir / f"{session_id}.json"
         if not path.exists():
             raise FileNotFoundError(f"Session not found: {session_id}")
@@ -277,12 +294,14 @@ class SessionManager:
 
     def append_query_result(self, session_id: str, query: QueryRecord) -> None:
         """Append a QueryRecord to an existing session."""
+        _validate_session_id(session_id)
         session = self.load_session(session_id)
         session.queries.append(query)
         self.save_session(session)
 
     def add_note(self, session_id: str, note: str) -> None:
         """Append a note to a session (double newline separator)."""
+        _validate_session_id(session_id)
         session = self.load_session(session_id)
         if session.notes:
             session.notes = session.notes + "\n\n" + note
@@ -298,6 +317,7 @@ class SessionManager:
         relevance: str,
     ) -> None:
         """Find patent across all queries in session and update note + relevance."""
+        _validate_session_id(session_id)
         session = self.load_session(session_id)
         updated = False
         for query in session.queries:
@@ -318,6 +338,7 @@ class SessionManager:
 
         Returns the path to the written file.
         """
+        _validate_session_id(session_id)
         session = self.load_session(session_id)
 
         if output_path is None:
@@ -372,9 +393,7 @@ class SessionManager:
 
             lines.append("## Patents Found")
             lines.append("")
-            lines.append(
-                "| Patent ID | Title | Date | Relevance | Assignee | Note |"
-            )
+            lines.append("| Patent ID | Title | Date | Relevance | Assignee | Note |")
             lines.append("|-----------|-------|------|-----------|----------|------|")
             for hit in sorted_hits:
                 title = (hit.title or "").replace("|", "\\|")
@@ -398,9 +417,7 @@ class SessionManager:
                 lines.append(f"**Results:** {query.result_count}  ")
                 lines.append("")
                 if query.results:
-                    lines.append(
-                        "| Patent ID | Title | Date | Relevance |"
-                    )
+                    lines.append("| Patent ID | Title | Date | Relevance |")
                     lines.append("|-----------|-------|------|-----------|")
                     for hit in query.results:
                         title = (hit.title or "").replace("|", "\\|")
@@ -431,7 +448,8 @@ class SessionManager:
                 try:
                     data = json.loads(index_path.read_text(encoding="utf-8"))
                     existing = [
-                        s for s in data.get("sessions", [])
+                        s
+                        for s in data.get("sessions", [])
                         if s.get("session_id") != session.session_id
                     ]
                 except (json.JSONDecodeError, KeyError):
@@ -450,8 +468,6 @@ class SessionManager:
 
             content = json.dumps({"sessions": existing}, indent=2, ensure_ascii=False)
             # Use a unique tmp file name per-thread to avoid collisions
-            tmp_path = index_path.with_name(
-                f".index.json.{threading.get_ident()}.tmp"
-            )
+            tmp_path = index_path.with_name(f".index.json.{threading.get_ident()}.tmp")
             tmp_path.write_text(content, encoding="utf-8")
             tmp_path.rename(index_path)

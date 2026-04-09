@@ -6,12 +6,13 @@ Runs all 32 test cases from manual_e2e.md by directly invoking the MCP server vi
 
 import subprocess
 import json
+import shutil
 import sys
 from typing import Any, Dict, List
 from dataclasses import dataclass
 from datetime import datetime
 
-SERVER_PATH = "/home/xertrov/.cargo/bin/patent-mcp-server"
+SERVER_PATH = shutil.which("patent-mcp-server") or "/usr/local/bin/patent-mcp-server"
 
 
 @dataclass

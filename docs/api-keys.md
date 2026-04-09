@@ -90,8 +90,8 @@ global_db = "~/.local/share/patent-cache/index.db"  # XDG default
 
 [sources]
 priority = ["USPTO", "EPO_OPS", "BigQuery", "Espacenet", "WIPO_Scrape", "IP_Australia", "CIPO", "web_search"]
-fetch_all_sources = false     # If true, fan-out to all sources concurrently
-concurrency = 5
+fetch_all_sources = true      # If false, stop after first successful source
+concurrency = 10
 timeout = 30.0
 
 [sources.epo_ops]
@@ -143,9 +143,9 @@ GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
 | `PATENT_LENS_KEY` | — | Lens.org API key |
 | `PATENT_SERPAPI_KEY` | — | SerpAPI key for web search |
 | `PATENT_BING_KEY` | — | Bing Search API key |
-| `PATENT_CONCURRENCY` | `5` | Max concurrent patent fetches |
+| `PATENT_CONCURRENCY` | `10` | Max concurrent patent fetches |
 | `PATENT_TIMEOUT` | `30.0` | HTTP timeout in seconds |
-| `PATENT_FETCH_ALL_SOURCES` | `false` | Fan-out to all sources concurrently |
+| `PATENT_FETCH_ALL_SOURCES` | `true` | Fan-out to all sources concurrently |
 | `PATENT_DISABLE_MARKER` | `false` | Disable marker PDF converter |
 | `PATENT_BIGQUERY_PROJECT` | — | GCP project for BigQuery |
 | `PATENT_ACTIVITY_JOURNAL` | `.patent-activity.jsonl` | Per-repo activity journal (empty = disabled) |

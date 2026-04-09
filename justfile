@@ -60,23 +60,23 @@ test-filter PATTERN:
 
 # Run Rust tests
 test-rust:
-    cargo test --manifest-path src/rust/Cargo.toml
+    CC=gcc cargo test --manifest-path src/rust/Cargo.toml
 
 # Build Rust binary (debug)
 build-rust:
-    cargo build --manifest-path src/rust/Cargo.toml
+    CC=gcc cargo build --manifest-path src/rust/Cargo.toml
 
 # Build Rust binary (release)
 build-rust-release:
-    cargo build --release --manifest-path src/rust/Cargo.toml
+    CC=gcc cargo build --release --manifest-path src/rust/Cargo.toml
 
 # Check Rust without building binary
 check-rust:
-    cargo check --manifest-path src/rust/Cargo.toml
+    CC=gcc cargo check --manifest-path src/rust/Cargo.toml
 
 # Run clippy lints on Rust code
 lint-rust:
-    cargo clippy --manifest-path src/rust/Cargo.toml -- -D warnings
+    CC=gcc cargo clippy --manifest-path src/rust/Cargo.toml -- -D warnings
 
 # ── Combined ──────────────────────────────────────────────────────────────────
 

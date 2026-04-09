@@ -3,18 +3,11 @@
 from __future__ import annotations
 
 import os
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    try:
-        import tomllib
-    except ImportError:
-        import tomli as tomllib  # type: ignore[no-redef]
+import tomllib
 
 
 # ---------------------------------------------------------------------------
@@ -90,17 +83,19 @@ class PatentConfig:
     source_base_urls: dict[str, str] = field(default_factory=dict)
 
     # Activity journal (None = disabled, relative to CWD by default)
-    activity_journal: Path | None = field(default_factory=lambda: Path(".patent-activity.jsonl"))
+    activity_journal: Path | None = field(
+        default_factory=lambda: Path(".patent-activity.jsonl")
+    )
 
     # Search settings
     search_browser_profiles_dir: Path | None = None  # None = XDG default
     search_browser_default_profile: str = "default"
     search_browser_headless: bool = True
-    search_browser_timeout: float = 60.0        # navigation timeout, seconds
+    search_browser_timeout: float = 60.0  # navigation timeout, seconds
     search_browser_max_pages: int = 3
     search_browser_idle_timeout: float = 1800.0  # 30 minutes
     search_browser_debug_html_dir: Path | None = None
-    search_backend_default: str = "browser"     # "browser" | "serpapi" | "auto"
+    search_backend_default: str = "browser"  # "browser" | "serpapi" | "auto"
     search_enrich_top_n: int = 5
 
     # Misc test flags

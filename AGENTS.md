@@ -99,8 +99,7 @@ python -m patent_mcp           # fetch MCP server
 
 Key env vars (also configurable via `.patentrc`):
 - `PATENT_SERPAPI_KEY` — SerpAPI key for search
-- `PATENT_USPTO_API_KEY` — USPTO API key
-- `PATENT_EPO_API_KEY` / `PATENT_EPO_SECRET` — EPO OPS credentials
+- `PATENT_EPO_KEY` — EPO OPS credentials (`client_id:client_secret`)
 - `PATENT_BROWSER_HEADLESS` — browser headless mode (default: true)
 - `PATENT_BROWSER_PROFILES_DIR` — browser profile directory
 - `PATENT_SEARCH_BACKEND` — default search backend (auto/browser/serpapi)

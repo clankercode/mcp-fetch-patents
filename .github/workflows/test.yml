@@ -51,9 +51,13 @@ jobs:
 
       - name: Build
         run: cargo build --manifest-path src/rust/Cargo.toml
+        env:
+          CC: gcc
 
       - name: Test
         run: cargo test --manifest-path src/rust/Cargo.toml
+        env:
+          CC: gcc
 
   cross-impl:
     name: Cross-implementation parity tests
@@ -80,6 +84,8 @@ jobs:
 
       - name: Build Rust binary
         run: cargo build --manifest-path src/rust/Cargo.toml
+        env:
+          CC: gcc
 
       - name: Run parity tests
         run: pytest tests/cross_impl/ -v --tb=short

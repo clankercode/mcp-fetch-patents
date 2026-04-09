@@ -473,6 +473,41 @@ fn route_line(line: &str) -> Dispatch {
 // Async tool execution
 // ---------------------------------------------------------------------------
 
+fn append_search_to_session(
+    sm: &crate::search::session_manager::SessionManager,
+    session_id: &str,
+    query_text: &str,
+    source: &str,
+    hits: &[&crate::ranking::PatentHit],
+    metadata: Option<serde_json::Value>,
+    extra_classifications: Option<&[String]>,
+) -> anyhow::Result<()> {
+    let mut session = sm.load_session(session_id)?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let query_num = session.queries.len() + 1;
+    let results: Vec<crate::ranking::PatentHit> =
+        hits.iter().map(|h| (**h).clone()).collect();
+    let record = crate::search::session_manager::QueryRecord {
+        query_id: format!("q{:03}", query_num),
+        timestamp: now,
+        source: source.to_string(),
+        query_text: query_text.to_string(),
+        result_count: results.len() as i64,
+        results,
+        metadata,
+    };
+    session.queries.push(record);
+    if let Some(classifications) = extra_classifications {
+        for c in classifications {
+            if !session.classifications_explored.contains(c) {
+                session.classifications_explored.push(c.clone());
+            }
+        }
+    }
+    sm.save_session(&mut session)?;
+    Ok(())
+}
+
 struct BrowserBackendConfig {
     profiles_dir: Option<std::path::PathBuf>,
     profile_name: String,
@@ -718,31 +753,20 @@ async fn execute_tool_call(
 
             if let Some(ref sid) = session_id {
                 if !all_hits.is_empty() {
-                    let sm = &backends.session_manager;
-                    if let Ok(mut session) = sm.load_session(sid) {
-                        let now = chrono::Utc::now().to_rfc3339();
-                        let query_num = session.queries.len() + 1;
-                        let session_hits: Vec<crate::search::session_manager::PatentHit> = all_hits
-                            .iter()
-                            .map(|h| (**h).clone().into())
-                            .collect();
-                        let record = crate::search::session_manager::QueryRecord {
-                            query_id: format!("q{:03}", query_num),
-                            timestamp: now,
-                            source: "serpapi".to_string(),
-                            query_text: description.clone(),
-                            result_count: session_hits.len() as i64,
-                            results: session_hits,
-                            metadata: Some(serde_json::json!({
-                                "search_mode": backend,
-                                "planner_concepts": intent.concepts,
-                                "planner_synonyms": intent.synonyms,
-                                "query_variants": intent.query_variants.iter().map(|v| &v.query).collect::<Vec<_>>(),
-                            })),
-                        };
-                        session.queries.push(record);
-                        let _ = sm.save_session(&mut session);
-                    }
+                    let _ = append_search_to_session(
+                        &backends.session_manager,
+                        sid,
+                        &description,
+                        "serpapi",
+                        &all_hits,
+                        Some(serde_json::json!({
+                            "search_mode": backend,
+                            "planner_concepts": intent.concepts,
+                            "planner_synonyms": intent.synonyms,
+                            "query_variants": intent.query_variants.iter().map(|v| &v.query).collect::<Vec<_>>(),
+                        })),
+                        None,
+                    );
                 }
             }
 
@@ -835,25 +859,17 @@ async fn execute_tool_call(
 
             if let Some(ref sid) = session_id {
                 if !deduped.is_empty() {
-                    let sm = &backends.session_manager;
-                    if let Ok(mut session) = sm.load_session(sid) {
-                        let now = chrono::Utc::now().to_rfc3339();
-                        let query_num = session.queries.len() + 1;
-                        let session_hits: Vec<crate::search::session_manager::PatentHit> = deduped.iter().map(|h| (*h).clone().into()).collect();
-                        let record = crate::search::session_manager::QueryRecord {
-                            query_id: format!("q{:03}", query_num),
-                            timestamp: now,
-                            source: "structured".to_string(),
-                            query_text: query.clone(),
-                            result_count: session_hits.len() as i64,
-                            results: session_hits,
-                            metadata: Some(serde_json::json!({
-                                "sources": sources,
-                            })),
-                        };
-                        session.queries.push(record);
-                        let _ = sm.save_session(&mut session);
-                    }
+                    let _ = append_search_to_session(
+                        &backends.session_manager,
+                        sid,
+                        &query,
+                        "structured",
+                        &deduped,
+                        Some(serde_json::json!({
+                            "sources": sources,
+                        })),
+                        None,
+                    );
                 }
             }
 
@@ -960,29 +976,19 @@ async fn execute_tool_call(
 
             if let Some(ref sid) = session_id {
                 if !hits.is_empty() {
-                    let sm = &backends.session_manager;
-                    if let Ok(mut session) = sm.load_session(sid) {
-                        let now = chrono::Utc::now().to_rfc3339();
-                        let query_num = session.queries.len() + 1;
-                        let session_hits: Vec<crate::search::session_manager::PatentHit> = hits.iter().map(|h| h.clone().into()).collect();
-                        let record = crate::search::session_manager::QueryRecord {
-                            query_id: format!("q{:03}", query_num),
-                            timestamp: now,
-                            source: "EPO_OPS".to_string(),
-                            query_text: code.clone(),
-                            result_count: session_hits.len() as i64,
-                            results: session_hits,
-                            metadata: Some(serde_json::json!({
-                                "classification_code": code,
-                                "include_subclasses": include_subclasses,
-                            })),
-                        };
-                        session.queries.push(record);
-                        if !session.classifications_explored.contains(&code) {
-                            session.classifications_explored.push(code.clone());
-                        }
-                        let _ = sm.save_session(&mut session);
-                    }
+                    let hit_refs: Vec<&crate::ranking::PatentHit> = hits.iter().collect();
+                    let _ = append_search_to_session(
+                        &backends.session_manager,
+                        sid,
+                        &code,
+                        "EPO_OPS",
+                        &hit_refs,
+                        Some(serde_json::json!({
+                            "classification_code": code,
+                            "include_subclasses": include_subclasses,
+                        })),
+                        Some(std::slice::from_ref(&code)),
+                    );
                 }
             }
 

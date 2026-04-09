@@ -12,7 +12,6 @@ venv/
 
 # Rust
 target/
-Cargo.lock
 
 # Patent cache
 .patents/

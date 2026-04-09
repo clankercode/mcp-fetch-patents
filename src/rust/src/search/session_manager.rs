@@ -7,34 +7,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PatentHit {
-    pub patent_id: String,
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub date: Option<String>,
-    #[serde(default)]
-    pub assignee: Option<String>,
-    #[serde(default)]
-    pub inventors: Vec<String>,
-    #[serde(default)]
-    pub abstract_text: Option<String>,
-    #[serde(default)]
-    pub source: String,
-    #[serde(default = "default_relevance")]
-    pub relevance: String,
-    #[serde(default)]
-    pub note: String,
-    #[serde(default)]
-    pub prior_art: Option<bool>,
-    #[serde(default)]
-    pub url: Option<String>,
-}
-
-fn default_relevance() -> String {
-    "unknown".to_string()
-}
+pub use crate::ranking::PatentHit;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QueryRecord {
@@ -295,6 +268,39 @@ impl SessionManager {
             None => self.dir.join(format!("{}-report.md", session_id)),
         };
 
+        if output_path.is_relative() {
+            let mut depth: i32 = 0;
+            for comp in output_path.components() {
+                match comp {
+                    std::path::Component::ParentDir => {
+                        depth -= 1;
+                        if depth < 0 {
+                            anyhow::bail!(
+                                "output_path escapes directory: {}",
+                                output_path.display()
+                            );
+                        }
+                    }
+                    std::path::Component::Normal(_) => {
+                        depth += 1;
+                    }
+                    std::path::Component::CurDir => {}
+                    std::path::Component::Prefix(_) | std::path::Component::RootDir => {}
+                }
+            }
+        } else if let Ok(canonical_path) = output_path.canonicalize() {
+            let canonical_dir = self.dir.canonicalize().unwrap_or_else(|_| self.dir.clone());
+            let canonical_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            if !canonical_path.starts_with(&canonical_dir)
+                && !canonical_path.starts_with(&canonical_cwd)
+            {
+                anyhow::bail!(
+                    "output_path escapes allowed directories: {}",
+                    output_path.display()
+                );
+            }
+        }
+
         let mut lines: Vec<String> = Vec::new();
 
         lines.push(format!("# Patent Search Report: {}", session.topic));
@@ -442,42 +448,6 @@ impl SessionManager {
     }
 }
 
-impl From<crate::ranking::PatentHit> for PatentHit {
-    fn from(h: crate::ranking::PatentHit) -> Self {
-        Self {
-            patent_id: h.patent_id,
-            title: h.title,
-            date: h.date,
-            assignee: h.assignee,
-            inventors: h.inventors,
-            abstract_text: h.abstract_text,
-            source: h.source,
-            relevance: h.relevance,
-            note: h.note,
-            prior_art: h.prior_art,
-            url: h.url,
-        }
-    }
-}
-
-impl From<PatentHit> for crate::ranking::PatentHit {
-    fn from(h: PatentHit) -> Self {
-        Self {
-            patent_id: h.patent_id,
-            title: h.title,
-            date: h.date,
-            assignee: h.assignee,
-            inventors: h.inventors,
-            abstract_text: h.abstract_text,
-            source: h.source,
-            relevance: h.relevance,
-            note: h.note,
-            prior_art: h.prior_art,
-            url: h.url,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,7 +468,7 @@ mod tests {
             inventors: vec![],
             abstract_text: None,
             source: String::new(),
-            relevance: default_relevance(),
+            relevance: "unknown".to_string(),
             note: String::new(),
             prior_art: None,
             url: None,
@@ -899,7 +869,7 @@ mod tests {
     }
 
     #[test]
-    fn patent_hit_serde_compatible_with_ranking() {
+    fn patent_hit_serde_roundtrip() {
         let hit = PatentHit {
             patent_id: "US1234".to_string(),
             title: Some("Test".to_string()),
@@ -915,17 +885,12 @@ mod tests {
         };
 
         let json = serde_json::to_string(&hit).unwrap();
-        let ranking_hit: crate::ranking::PatentHit = serde_json::from_str(&json).unwrap();
-        assert_eq!(ranking_hit.patent_id, "US1234");
-        assert_eq!(ranking_hit.title.as_deref(), Some("Test"));
-        assert_eq!(ranking_hit.relevance, "high");
-        assert_eq!(ranking_hit.prior_art, Some(true));
-
-        let ranking_json = serde_json::to_string(&ranking_hit).unwrap();
-        let roundtrip: PatentHit = serde_json::from_str(&ranking_json).unwrap();
+        let roundtrip: PatentHit = serde_json::from_str(&json).unwrap();
         assert_eq!(roundtrip.patent_id, hit.patent_id);
         assert_eq!(roundtrip.title, hit.title);
         assert_eq!(roundtrip.relevance, hit.relevance);
+        assert_eq!(roundtrip.prior_art, hit.prior_art);
+        assert_eq!(roundtrip.inventors, hit.inventors);
     }
 
     #[test]
