@@ -145,11 +145,9 @@ impl SessionCache {
     }
 
     pub fn get(&self, source: &str) -> Option<String> {
-        let mut tokens = self.tokens.lock().unwrap();
+        let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         match tokens.entry(source.to_string()) {
-            Entry::Occupied(e) if e.get().expires_at > Utc::now() => {
-                Some(e.get().token.clone())
-            }
+            Entry::Occupied(e) if e.get().expires_at > Utc::now() => Some(e.get().token.clone()),
             Entry::Occupied(e) => {
                 e.remove();
                 None
@@ -165,7 +163,7 @@ impl SessionCache {
     }
 
     pub fn set_with_expiry(&self, source: &str, token: &str, expires_at: DateTime<Utc>) {
-        let mut tokens = self.tokens.lock().unwrap();
+        let mut tokens = self.tokens.lock().unwrap_or_else(|e| e.into_inner());
         tokens.insert(
             source.to_string(),
             SessionToken {
@@ -176,7 +174,10 @@ impl SessionCache {
     }
 
     pub fn invalidate(&self, source: &str) {
-        self.tokens.lock().unwrap().remove(source);
+        self.tokens
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(source);
     }
 }
 
@@ -258,7 +259,7 @@ impl PatentCache {
                 "SELECT canonical_id, jurisdiction, doc_type, title, abstract, inventors,
                         assignee, filing_date, publication_date, grant_date, fetched_at,
                         legal_status, status_fetched_at, cache_dir
-                 FROM patents WHERE canonical_id = ?1"
+                 FROM patents WHERE canonical_id = ?1",
             )?;
             stmt.query_row(params![canonical_id], |row| {
                 Ok((
@@ -277,11 +278,26 @@ impl PatentCache {
                     row.get::<_, Option<String>>(12)?,
                     row.get::<_, String>(13)?,
                 ))
-            }).optional()?
+            })
+            .optional()?
         };
 
-        let (cid, jur, doc_type, title, abs, inventors_json, assignee, filing, pub_date,
-             grant, fetched_at, legal_status, _status_fetched_at, cache_dir) = match row {
+        let (
+            cid,
+            jur,
+            doc_type,
+            title,
+            abs,
+            inventors_json,
+            assignee,
+            filing,
+            pub_date,
+            grant,
+            fetched_at,
+            legal_status,
+            _status_fetched_at,
+            cache_dir,
+        ) = match row {
             None => return Ok(None),
             Some(r) => r,
         };
@@ -292,9 +308,8 @@ impl PatentCache {
             .unwrap_or_default();
 
         // Get file locations
-        let mut stmt = conn.prepare(
-            "SELECT format, path FROM patent_locations WHERE patent_id = ?1"
-        )?;
+        let mut stmt =
+            conn.prepare("SELECT format, path FROM patent_locations WHERE patent_id = ?1")?;
         let loc_rows: Vec<(String, String)> = stmt
             .query_map(params![canonical_id], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -376,12 +391,17 @@ impl PatentCache {
             if !sources.is_empty() {
                 let sources_json = dest_dir.join("sources.json");
                 let sources_content = serde_json::to_string_pretty(
-                    &sources.iter().map(|s| serde_json::json!({
-                        "source": s.source,
-                        "success": s.success,
-                        "elapsed_ms": s.elapsed_ms,
-                        "error": s.error,
-                    })).collect::<Vec<_>>()
+                    &sources
+                        .iter()
+                        .map(|s| {
+                            serde_json::json!({
+                                "source": s.source,
+                                "success": s.success,
+                                "elapsed_ms": s.elapsed_ms,
+                                "error": s.error,
+                            })
+                        })
+                        .collect::<Vec<_>>(),
                 )?;
                 std::fs::write(sources_json, sources_content)?;
             }
@@ -442,13 +462,16 @@ impl PatentCache {
     /// List all patents in the local cache.
     pub fn list_all(&self) -> Result<Vec<CacheEntry>> {
         let conn = self.connect()?;
-        let mut stmt = conn.prepare("SELECT canonical_id, cache_dir FROM patents ORDER BY canonical_id")?;
-        let entries = stmt.query_map([], |row| {
-            Ok(CacheEntry {
-                canonical_id: row.get(0)?,
-                cache_dir: PathBuf::from(row.get::<_, String>(1)?),
-            })
-        })?.collect::<rusqlite::Result<_>>()?;
+        let mut stmt =
+            conn.prepare("SELECT canonical_id, cache_dir FROM patents ORDER BY canonical_id")?;
+        let entries = stmt
+            .query_map([], |row| {
+                Ok(CacheEntry {
+                    canonical_id: row.get(0)?,
+                    cache_dir: PathBuf::from(row.get::<_, String>(1)?),
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
         Ok(entries)
     }
 }
@@ -535,7 +558,12 @@ mod tests {
         let pdf = tmp.path().join("test.pdf");
         std::fs::write(&pdf, b"%PDF-1.4").unwrap();
 
-        let artifacts = ArtifactSet { pdf: Some(pdf), txt: None, md: None, images: vec![] };
+        let artifacts = ArtifactSet {
+            pdf: Some(pdf),
+            txt: None,
+            md: None,
+            images: vec![],
+        };
         let meta = make_meta("US7654321");
         cache.store("US7654321", &artifacts, &meta, None).unwrap();
 
@@ -567,8 +595,32 @@ mod tests {
         let pdf2 = tmp.path().join("b.pdf");
         std::fs::write(&pdf2, b"%PDF-1.4").unwrap();
 
-        cache.store("US7654321", &ArtifactSet { pdf: Some(pdf1), txt: None, md: None, images: vec![] }, &make_meta("US7654321"), None).unwrap();
-        cache.store("EP1234567", &ArtifactSet { pdf: Some(pdf2), txt: None, md: None, images: vec![] }, &make_meta("EP1234567"), None).unwrap();
+        cache
+            .store(
+                "US7654321",
+                &ArtifactSet {
+                    pdf: Some(pdf1),
+                    txt: None,
+                    md: None,
+                    images: vec![],
+                },
+                &make_meta("US7654321"),
+                None,
+            )
+            .unwrap();
+        cache
+            .store(
+                "EP1234567",
+                &ArtifactSet {
+                    pdf: Some(pdf2),
+                    txt: None,
+                    md: None,
+                    images: vec![],
+                },
+                &make_meta("EP1234567"),
+                None,
+            )
+            .unwrap();
 
         let entries = cache.list_all().unwrap();
         assert_eq!(entries.len(), 2);
@@ -607,8 +659,15 @@ mod tests {
         let pdf = dest_dir.join("US7654321.pdf");
         std::fs::write(&pdf, b"%PDF-1.4").unwrap();
 
-        let artifacts = ArtifactSet { pdf: Some(pdf), txt: None, md: None, images: vec![] };
-        cache.store("US7654321", &artifacts, &make_meta("US7654321"), None).unwrap();
+        let artifacts = ArtifactSet {
+            pdf: Some(pdf),
+            txt: None,
+            md: None,
+            images: vec![],
+        };
+        cache
+            .store("US7654321", &artifacts, &make_meta("US7654321"), None)
+            .unwrap();
         // Should not panic or return error
     }
 }

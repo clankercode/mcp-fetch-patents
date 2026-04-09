@@ -29,7 +29,9 @@ coverage.xml
 
 # Tool / runtime state
 .opencode/
+.codex/
 .goal-loops/
+.ruff_cache/
 .patent-sessions/
 .patent-activity.jsonl
 .playwright-mcp/
@@ -43,3 +45,7 @@ artifacts/
 
 # OS
 .DS_Store
+
+# Manual test artifacts
+manual_e2e.log
+manual_e2e.md

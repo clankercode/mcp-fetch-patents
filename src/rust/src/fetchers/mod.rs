@@ -365,7 +365,21 @@ impl FetcherOrchestrator {
             ordered.push_back(async move {
                 // Acquire permit inside the async block so FuturesOrdered can
                 // poll futures concurrently instead of blocking the for loop.
-                let permit = sem.acquire_owned().await.expect("semaphore closed");
+                let permit = match sem.acquire_owned().await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        return OrchestratorResult {
+                            canonical_id: patent_clone.canonical,
+                            success: false,
+                            cache_dir: None,
+                            files: HashMap::new(),
+                            metadata: None,
+                            sources: vec![],
+                            error: Some(format!("semaphore closed: {}", e)),
+                            from_cache: false,
+                        }
+                    }
+                };
                 let res = self
                     .fetch_internal(&patent_clone, &out_dir, force_refresh)
                     .await;

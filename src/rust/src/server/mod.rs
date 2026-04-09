@@ -60,6 +60,13 @@ impl RpcResponse {
     }
 }
 
+fn tool_error(id: Value, message: &str) -> RpcResponse {
+    RpcResponse::ok(id, serde_json::json!({
+        "content": [{"type": "text", "text": message}],
+        "isError": true
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // MCP tool descriptors
 // ---------------------------------------------------------------------------
@@ -461,6 +468,7 @@ fn route_line(line: &str) -> Dispatch {
             "serverInfo": {"name": "patent-mcp-server", "version": "0.1.0"}
         }))),
         "initialized" => Dispatch::Notification,
+        "ping" => Dispatch::Immediate(RpcResponse::ok(id, serde_json::json!({}))),
         "tools/list" => Dispatch::Immediate(RpcResponse::ok(id, tools_list())),
         "tools/call" => {
             match req.params {
@@ -559,7 +567,8 @@ async fn execute_tool_call(
             journal.log_fetch(&patent_ids, &payload["summary"]);
 
             RpcResponse::ok(id, serde_json::json!({
-                "content": [{"type": "text", "text": payload.to_string()}]
+                "content": [{"type": "text", "text": payload.to_string()}],
+                "isError": false
             }))
         }
 
@@ -574,10 +583,11 @@ async fn execute_tool_call(
                     journal.log_list(count);
                     let payload = serde_json::json!({"patents": patents, "count": count});
                     RpcResponse::ok(id, serde_json::json!({
-                        "content": [{"type": "text", "text": payload.to_string()}]
+                        "content": [{"type": "text", "text": payload.to_string()}],
+                        "isError": false
                     }))
                 }
-                Err(e) => RpcResponse::err(id, -32603, &format!("Cache error: {}", e)),
+                Err(e) => tool_error(id, &format!("Cache error: {}", e)),
             }
         }
 
@@ -613,7 +623,8 @@ async fn execute_tool_call(
 
             let payload = serde_json::json!({"results": results});
             RpcResponse::ok(id, serde_json::json!({
-                "content": [{"type": "text", "text": payload.to_string()}]
+                "content": [{"type": "text", "text": payload.to_string()}],
+                "isError": false
             }))
         }
 
@@ -804,7 +815,8 @@ async fn execute_tool_call(
             });
 
             RpcResponse::ok(id, serde_json::json!({
-                "content": [{"type": "text", "text": payload.to_string()}]
+                "content": [{"type": "text", "text": payload.to_string()}],
+                "isError": false
             }))
         }
 
@@ -896,7 +908,8 @@ async fn execute_tool_call(
             });
 
             RpcResponse::ok(id, serde_json::json!({
-                "content": [{"type": "text", "text": payload.to_string()}]
+                "content": [{"type": "text", "text": payload.to_string()}],
+                "isError": false
             }))
         }
 
@@ -960,7 +973,8 @@ async fn execute_tool_call(
             });
 
             RpcResponse::ok(id, serde_json::json!({
-                "content": [{"type": "text", "text": payload.to_string()}]
+                "content": [{"type": "text", "text": payload.to_string()}],
+                "isError": false
             }))
         }
 
@@ -1013,7 +1027,8 @@ async fn execute_tool_call(
             });
 
             RpcResponse::ok(id, serde_json::json!({
-                "content": [{"type": "text", "text": payload.to_string()}]
+                "content": [{"type": "text", "text": payload.to_string()}],
+                "isError": false
             }))
         }
 
@@ -1044,7 +1059,8 @@ async fn execute_tool_call(
             });
 
             RpcResponse::ok(id, serde_json::json!({
-                "content": [{"type": "text", "text": payload.to_string()}]
+                "content": [{"type": "text", "text": payload.to_string()}],
+                "isError": false
             }))
         }
 
@@ -1103,7 +1119,8 @@ async fn execute_tool_call(
             });
 
             RpcResponse::ok(id, serde_json::json!({
-                "content": [{"type": "text", "text": payload.to_string()}]
+                "content": [{"type": "text", "text": payload.to_string()}],
+                "isError": false
             }))
         }
 
@@ -1123,10 +1140,11 @@ async fn execute_tool_call(
                         "message": format!("Session created. Use session_id='{}' in search calls to auto-save results.", session.session_id),
                     });
                     RpcResponse::ok(id, serde_json::json!({
-                        "content": [{"type": "text", "text": payload.to_string()}]
+                        "content": [{"type": "text", "text": payload.to_string()}],
+                        "isError": false
                     }))
                 }
-                Err(e) => RpcResponse::err(id, -32603, &format!("Session create error: {}", e)),
+                Err(e) => tool_error(id, &format!("Session create error: {}", e)),
             }
         }
 
@@ -1138,10 +1156,11 @@ async fn execute_tool_call(
                 Ok(session) => {
                     let payload = serde_json::to_value(&session).unwrap_or(Value::Null);
                     RpcResponse::ok(id, serde_json::json!({
-                        "content": [{"type": "text", "text": payload.to_string()}]
+                        "content": [{"type": "text", "text": payload.to_string()}],
+                        "isError": false
                     }))
                 }
-                Err(_) => RpcResponse::err(id, -32603,
+                Err(_) => tool_error(id,
                     &format!("Session '{}' not found. Use patent_session_list to see available sessions.", session_id)),
             }
         }
@@ -1156,7 +1175,8 @@ async fn execute_tool_call(
                 "total": summaries.len(),
             });
             RpcResponse::ok(id, serde_json::json!({
-                "content": [{"type": "text", "text": payload.to_string()}]
+                "content": [{"type": "text", "text": payload.to_string()}],
+                "isError": false
             }))
         }
 
@@ -1169,10 +1189,11 @@ async fn execute_tool_call(
                 Ok(()) => {
                     let payload = serde_json::json!({"status": "note added", "session_id": session_id});
                     RpcResponse::ok(id, serde_json::json!({
-                        "content": [{"type": "text", "text": payload.to_string()}]
+                        "content": [{"type": "text", "text": payload.to_string()}],
+                        "isError": false
                     }))
                 }
-                Err(e) => RpcResponse::err(id, -32603, &format!("Note error: {}", e)),
+                Err(e) => tool_error(id, &format!("Note error: {}", e)),
             }
         }
 
@@ -1192,10 +1213,11 @@ async fn execute_tool_call(
                         "status": "annotated",
                     });
                     RpcResponse::ok(id, serde_json::json!({
-                        "content": [{"type": "text", "text": payload.to_string()}]
+                        "content": [{"type": "text", "text": payload.to_string()}],
+                        "isError": false
                     }))
                 }
-                Err(e) => RpcResponse::err(id, -32603, &format!("Annotate error: {}", e)),
+                Err(e) => tool_error(id, &format!("Annotate error: {}", e)),
             }
         }
 
@@ -1211,10 +1233,11 @@ async fn execute_tool_call(
                         "status": "exported",
                     });
                     RpcResponse::ok(id, serde_json::json!({
-                        "content": [{"type": "text", "text": payload.to_string()}]
+                        "content": [{"type": "text", "text": payload.to_string()}],
+                        "isError": false
                     }))
                 }
-                Err(e) => RpcResponse::err(id, -32603, &format!("Export error: {}", e)),
+                Err(e) => tool_error(id, &format!("Export error: {}", e)),
             }
         }
 
@@ -1226,14 +1249,14 @@ async fn execute_tool_call(
             let profile_dir = match pm.get_profile_dir(&profile_name) {
                 Ok(d) => d,
                 Err(e) => {
-                    return RpcResponse::err(id, -32603, &format!("Profile error: {}", e));
+                    return tool_error(id, &format!("Profile error: {}", e));
                 }
             };
 
             match pm.acquire_lock(&profile_name, "login") {
                 Ok(()) => {}
                 Err(e) => {
-                    return RpcResponse::err(id, -32603, &format!("Profile busy: {}", e));
+                    return tool_error(id, &format!("Profile busy: {}", e));
                 }
             }
 
@@ -1248,7 +1271,7 @@ async fn execute_tool_call(
                 Ok(c) => c,
                 Err(e) => {
                     let _ = pm.release_lock(&profile_name);
-                    return RpcResponse::err(id, -32603, &format!("Browser config error: {}", e));
+                    return tool_error(id, &format!("Browser config error: {}", e));
                 }
             };
 
@@ -1258,7 +1281,7 @@ async fn execute_tool_call(
                 Ok(bh) => bh,
                 Err(e) => {
                     let _ = pm.release_lock(&profile_name);
-                    return RpcResponse::err(id, -32603, &format!("Browser launch failed: {}. Is Chromium installed?", e));
+                    return tool_error(id, &format!("Browser launch failed: {}. Is Chromium installed?", e));
                 }
             };
 
@@ -1281,7 +1304,8 @@ async fn execute_tool_call(
                 "profile_dir": profile_dir.to_string_lossy(),
             });
             RpcResponse::ok(id, serde_json::json!({
-                "content": [{"type": "text", "text": payload.to_string()}]
+                "content": [{"type": "text", "text": payload.to_string()}],
+                "isError": false
             }))
         }
 
@@ -1395,30 +1419,36 @@ fn handle_line(line: &str, _config: &PatentConfig) -> Option<RpcResponse> {
                                 "errors": if patent_ids.is_empty() { 0 } else { patent_ids.len() },
                                 "total_duration_ms": 0.0
                             }
-                        }).to_string()}]
+                        }).to_string()}],
+                        "isError": false
                     }))
                 }
                 "list_cached_patents" => RpcResponse::ok(id, serde_json::json!({
-                    "content": [{"type": "text", "text": serde_json::json!({"patents": [], "count": 0}).to_string()}]
+                    "content": [{"type": "text", "text": serde_json::json!({"patents": [], "count": 0}).to_string()}],
+                    "isError": false
                 })),
                 "get_patent_metadata" => RpcResponse::ok(id, serde_json::json!({
-                    "content": [{"type": "text", "text": serde_json::json!({"results": []}).to_string()}]
+                    "content": [{"type": "text", "text": serde_json::json!({"results": []}).to_string()}],
+                    "isError": false
                 })),
                 "patent_search_natural" | "patent_search_structured" | "patent_suggest_queries" => {
                     RpcResponse::ok(id, serde_json::json!({
-                        "content": [{"type": "text", "text": serde_json::json!({"query": "", "results": []}).to_string()}]
+                        "content": [{"type": "text", "text": serde_json::json!({"query": "", "results": []}).to_string()}],
+                        "isError": false
                     }))
                 }
                 "patent_citation_chain" | "patent_classification_search" | "patent_family_search" => {
                     RpcResponse::ok(id, serde_json::json!({
-                        "content": [{"type": "text", "text": serde_json::json!({"results": []}).to_string()}]
+                        "content": [{"type": "text", "text": serde_json::json!({"results": []}).to_string()}],
+                        "isError": false
                     }))
                 }
                 "patent_session_create" | "patent_session_load" | "patent_session_list"
                 | "patent_session_note" | "patent_session_annotate" | "patent_session_export"
                 | "patent_search_profile_login_start" => {
                     RpcResponse::ok(id, serde_json::json!({
-                        "content": [{"type": "text", "text": serde_json::json!({"status": "ok"}).to_string()}]
+                        "content": [{"type": "text", "text": serde_json::json!({"status": "ok"}).to_string()}],
+                        "isError": false
                     }))
                 }
                 _ => RpcResponse::err(id, -32601, &format!("Unknown tool: {}", tool_name)),
@@ -1476,6 +1506,17 @@ mod tests {
         let line = r#"{"jsonrpc":"2.0","method":"initialized"}"#;
         let config = make_config();
         assert!(handle_line(line, &config).is_none());
+    }
+
+    #[test]
+    fn test_ping_returns_empty_result() {
+        let line = r#"{"jsonrpc":"2.0","id":99,"method":"ping"}"#;
+        let config = make_config();
+        let resp = handle_line(line, &config).unwrap();
+        assert!(resp.result.is_some());
+        assert!(resp.error.is_none());
+        let r = resp.result.unwrap();
+        assert!(r.as_object().unwrap().is_empty());
     }
 
     #[test]
@@ -1900,11 +1941,14 @@ mod tests {
 
         let params = tool_params("patent_search_profile_login_start", serde_json::json!({"name": "test"}));
         let resp = execute_tool_call(id, params, &config, &cache, &orchestrator, &journal, &backends).await;
-        if resp.result.is_some() {
-            let payload = extract_payload(resp);
-            assert_eq!(payload["profile_name"], "test");
+        assert!(resp.result.is_some());
+        let r = resp.result.unwrap();
+        if r["isError"] == true {
+            let text = r["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("Browser launch failed") || text.contains("Browser config error"));
         } else {
-            assert!(resp.error.is_some());
+            let payload: serde_json::Value = serde_json::from_str(r["content"][0]["text"].as_str().unwrap()).unwrap();
+            assert_eq!(payload["profile_name"], "test");
         }
     }
 
@@ -1946,9 +1990,12 @@ mod tests {
 
         let params = tool_params("patent_session_load", serde_json::json!({"session_id": "nonexistent-xyz"}));
         let resp = execute_tool_call(id, params, &config, &cache, &orchestrator, &journal, &backends).await;
-        assert!(resp.error.is_some());
-        let err = resp.error.unwrap();
-        assert!(err.message.contains("not found"));
+        assert!(resp.result.is_some());
+        assert!(resp.error.is_none());
+        let r = resp.result.unwrap();
+        assert_eq!(r["isError"], true);
+        let text = r["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("not found"));
     }
 
     #[tokio::test]

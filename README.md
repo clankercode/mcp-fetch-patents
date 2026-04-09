@@ -247,7 +247,7 @@ All config via autoloaded env files, `~/.patents.toml`, or environment variables
 ### Running tests
 
 ```bash
-# Rust tests (74 tests, <0.1s)
+# Rust tests (226 tests, <0.1s)
 cargo test --manifest-path src/rust/Cargo.toml
 
 # Direct stdio MCP smoke test against the Rust dev server

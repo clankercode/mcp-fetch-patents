@@ -72,20 +72,20 @@ src/rust/src/
 
 **Fetch tools:**
 - `fetch_patents` — fetch and cache patents by ID
-- `patent_cache_status` — cache info for patent IDs
-- `patent_convert` — format conversion
+- `list_cached_patents` — list all patents in local cache
+- `get_patent_metadata` — return cached metadata for patents
 
-**Search tools (13):**
+**Search tools (16):**
 - `patent_search_natural` — NL search with planner + enrichment
 - `patent_search_structured` — structured field search
 - `patent_suggest_queries` — query suggestions from description
-- `patent_search_session_create` / `list` / `load` / `export` — session management
-- `patent_search_session_annotate` — add notes to sessions
-- `patent_search_merge_sessions` — merge multiple sessions
-- `patent_get_citation_chains` — forward/backward citation chains
-- `patent_get_patent_family` — family members
-- `patent_get_classification_tree` — CPC/IPC tree
-- `patent_search_profile_login` — launch browser for profile login
+- `patent_citation_chain` — forward/backward citation chains
+- `patent_classification_search` — CPC/IPC classification search
+- `patent_family_search` — family members
+- `patent_session_create` / `list` / `load` / `export` — session management
+- `patent_session_note` — add timestamped notes to sessions
+- `patent_session_annotate` — annotate sessions
+- `patent_search_profile_login_start` — launch browser for profile login
 
 ## Python Search Server
 
