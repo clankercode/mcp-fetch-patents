@@ -264,6 +264,9 @@ pytest tests/python/
 
 # Cross-implementation parity — verifies Python == Rust (32 tests)
 pytest tests/cross_impl/
+
+# Manual E2E tests — automated script (31 tests)
+python3 run_manual_e2e.py
 ```
 
 ### Project structure

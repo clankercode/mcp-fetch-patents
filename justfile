@@ -109,6 +109,10 @@ mcp-smoke-rust PATENT_ID='US10000000B2':
 mcp-smoke-rust-installed PATENT_ID='US10000000B2':
     printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"fetch_patents","arguments":{"patent_ids":["{{PATENT_ID}}"],"force_refresh":true}}}' | /home/xertrov/.cargo/bin/patent-mcp-server
 
+# Run manual E2E test suite (31 tests against all tools)
+test-e2e:
+    python3 run_manual_e2e.py
+
 # ── Search ────────────────────────────────────────────────────────────────────
 
 # Start the patent-search MCP server with browser backend available
