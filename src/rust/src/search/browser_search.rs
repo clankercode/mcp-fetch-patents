@@ -53,6 +53,7 @@ impl GooglePatentsBrowserSearch {
         }
     }
 
+    #[tracing::instrument(skip_all)]
     pub async fn search(
         &self,
         query: &str,

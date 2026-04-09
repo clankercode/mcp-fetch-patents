@@ -15,7 +15,11 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
+from dataclasses import asdict
+
 from mcp.server.fastmcp import FastMCP  # noqa: E402
+
+from patent_mcp.utils import now_iso
 
 mcp = FastMCP("patent-search")
 
@@ -940,19 +944,7 @@ def patent_search_profile_login_start(
 
 def _hit_to_dict(hit) -> dict[str, Any]:
     """Convert a PatentHit to a plain dict."""
-    return {
-        "patent_id": hit.patent_id,
-        "title": hit.title,
-        "date": hit.date,
-        "assignee": hit.assignee,
-        "inventors": hit.inventors,
-        "abstract": hit.abstract,
-        "source": hit.source,
-        "relevance": hit.relevance,
-        "note": hit.note,
-        "prior_art": hit.prior_art,
-        "url": hit.url,
-    }
+    return asdict(hit)
 
 
 def _save_to_session(
@@ -973,7 +965,7 @@ def _save_to_session(
             q_hits = hits if i == 0 else []
             record = QueryRecord(
                 query_id=f"q{query_num + i:03d}",
-                timestamp=_now_iso(),
+                timestamp=now_iso(),
                 source=q.get("source", "unknown"),
                 query_text=q.get("query", q.get("code", "")),
                 result_count=q.get("result_count", len(q_hits)),
@@ -1036,12 +1028,6 @@ def _enrich_hits(scored_hits: list) -> list[str]:
         log.warning("Enrichment failed: %s", e)
 
     return enriched_ids
-
-
-def _now_iso() -> str:
-    from datetime import datetime, timezone
-
-    return datetime.now(tz=timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------

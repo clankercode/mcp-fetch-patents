@@ -78,7 +78,15 @@ check-rust:
 lint-rust:
     CC=gcc cargo clippy --manifest-path src/rust/Cargo.toml -- -D warnings
 
+# Format Rust code
+fmt-rust:
+    cargo fmt --manifest-path src/rust/Cargo.toml
+
 # ── Combined ──────────────────────────────────────────────────────────────────
+
+# Run all lints (Rust + Python)
+lint: lint-rust
+    ruff check src/python/
 
 # Run all tests (Python fast + Rust)
 ci:

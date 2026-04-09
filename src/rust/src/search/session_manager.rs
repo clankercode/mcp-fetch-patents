@@ -95,6 +95,39 @@ fn count_unique_patents(session: &Session) -> usize {
     seen.len()
 }
 
+fn update_index(dir: &Path, session: &Session) -> Result<()> {
+    let index_path = dir.join(".index.json");
+
+    let mut existing: Vec<SessionSummary> = Vec::new();
+    if index_path.exists() {
+        if let Ok(data) = fs::read_to_string(&index_path) {
+            if let Ok(idx) = serde_json::from_str::<IndexFile>(&data) {
+                existing = idx
+                    .sessions
+                    .into_iter()
+                    .filter(|s| s.session_id != session.session_id)
+                    .collect();
+            }
+        }
+    }
+
+    existing.push(SessionSummary {
+        session_id: session.session_id.clone(),
+        topic: session.topic.clone(),
+        created_at: session.created_at.clone(),
+        modified_at: session.modified_at.clone(),
+        query_count: session.queries.len(),
+        patent_count: count_unique_patents(session),
+    });
+
+    let index = IndexFile { sessions: existing };
+    let content = serde_json::to_string_pretty(&index)?;
+    let tmp_path = dir.join(".index.json.tmp");
+    fs::write(&tmp_path, &content)?;
+    fs::rename(&tmp_path, &index_path)?;
+    Ok(())
+}
+
 pub struct SessionManager {
     dir: PathBuf,
 }
@@ -115,7 +148,7 @@ impl SessionManager {
         &self.dir
     }
 
-    pub fn create_session(
+    pub async fn create_session(
         &self,
         topic: &str,
         prior_art_cutoff: Option<&str>,
@@ -137,113 +170,131 @@ impl SessionManager {
             citation_chains: Value::Object(serde_json::Map::new()),
             patent_families: BTreeMap::new(),
         };
-        let modified = self.save_session(&mut session)?;
+        let modified = self.save_session(&mut session).await?;
         session.modified_at = modified;
         Ok(session)
     }
 
-    pub fn load_session(&self, session_id: &str) -> Result<Session> {
-        validate_session_id(session_id)?;
-        let path = self.dir.join(format!("{}.json", session_id));
-        let canonical_dir = self.dir.canonicalize().unwrap_or_else(|_| self.dir.clone());
-        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
-        if !canonical_path.starts_with(&canonical_dir) {
-            anyhow::bail!("Session ID escapes sessions directory: {}", session_id);
-        }
-        if !path.exists() {
-            anyhow::bail!("Session not found: {}", session_id);
-        }
-        let data = fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read session file: {}", path.display()))?;
-        let session: Session = serde_json::from_str(&data)
-            .with_context(|| format!("Failed to parse session file: {}", path.display()))?;
-        Ok(session)
+    pub async fn load_session(&self, session_id: &str) -> Result<Session> {
+        let dir = self.dir.clone();
+        let id = session_id.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Session> {
+            validate_session_id(&id)?;
+            let path = dir.join(format!("{}.json", id));
+            let canonical_dir = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+            let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if !canonical_path.starts_with(&canonical_dir) {
+                anyhow::bail!("Session ID escapes sessions directory: {}", id);
+            }
+            if !path.exists() {
+                anyhow::bail!("Session not found: {}", id);
+            }
+            let data = fs::read_to_string(&path)
+                .with_context(|| format!("Failed to read session file: {}", path.display()))?;
+            let session: Session = serde_json::from_str(&data)
+                .with_context(|| format!("Failed to parse session file: {}", path.display()))?;
+            Ok(session)
+        })
+        .await?
     }
 
-    pub fn save_session(&self, session: &mut Session) -> Result<String> {
+    pub async fn save_session(&self, session: &mut Session) -> Result<String> {
         let modified = now_iso();
         session.modified_at = modified.clone();
-        let path = self.dir.join(format!("{}.json", session.session_id));
-        let tmp_path = self.dir.join(format!("{}.json.tmp", session.session_id));
+        let dir = self.dir.clone();
+        let sid = session.session_id.clone();
         let content = serde_json::to_string_pretty(&*session)?;
-        fs::write(&tmp_path, &content)
-            .with_context(|| format!("Failed to write tmp file: {}", tmp_path.display()))?;
-        fs::rename(&tmp_path, &path)
-            .with_context(|| format!("Failed to rename tmp to {}", path.display()))?;
-        self.update_index(session)?;
+        let session_snapshot = session.clone();
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let path = dir.join(format!("{}.json", sid));
+            let tmp_path = dir.join(format!("{}.json.tmp", sid));
+            fs::write(&tmp_path, &content)
+                .with_context(|| format!("Failed to write tmp file: {}", tmp_path.display()))?;
+            fs::rename(&tmp_path, &path)
+                .with_context(|| format!("Failed to rename tmp to {}", path.display()))?;
+            update_index(&dir, &session_snapshot)?;
+            Ok(())
+        })
+        .await??;
+
         Ok(modified)
     }
 
-    pub fn list_sessions(&self, limit: Option<usize>) -> Result<Vec<SessionSummary>> {
-        let index_path = self.dir.join(".index.json");
-        if index_path.exists() {
-            if let Ok(data) = fs::read_to_string(&index_path) {
-                if let Ok(idx) = serde_json::from_str::<IndexFile>(&data) {
-                    let mut summaries = idx.sessions;
-                    summaries.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
-                    if let Some(lim) = limit {
-                        summaries.truncate(lim);
+    pub async fn list_sessions(&self, limit: Option<usize>) -> Result<Vec<SessionSummary>> {
+        let dir = self.dir.clone();
+        tokio::task::spawn_blocking(move || -> Result<Vec<SessionSummary>> {
+            let index_path = dir.join(".index.json");
+            if index_path.exists() {
+                if let Ok(data) = fs::read_to_string(&index_path) {
+                    if let Ok(idx) = serde_json::from_str::<IndexFile>(&data) {
+                        let mut summaries = idx.sessions;
+                        summaries.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+                        if let Some(lim) = limit {
+                            summaries.truncate(lim);
+                        }
+                        return Ok(summaries);
                     }
-                    return Ok(summaries);
                 }
             }
-        }
 
-        let mut summaries: Vec<SessionSummary> = Vec::new();
-        for entry in fs::read_dir(&self.dir)? {
-            let entry = entry?;
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') || !name.ends_with(".json") {
-                continue;
-            }
-            if let Ok(data) = fs::read_to_string(entry.path()) {
-                if let Ok(session) = serde_json::from_str::<Session>(&data) {
-                    let pc = count_unique_patents(&session);
-                    summaries.push(SessionSummary {
-                        session_id: session.session_id,
-                        topic: session.topic,
-                        created_at: session.created_at,
-                        modified_at: session.modified_at,
-                        query_count: session.queries.len(),
-                        patent_count: pc,
-                    });
+            let mut summaries: Vec<SessionSummary> = Vec::new();
+            for entry in fs::read_dir(&dir)? {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') || !name.ends_with(".json") {
+                    continue;
+                }
+                if let Ok(data) = fs::read_to_string(entry.path()) {
+                    if let Ok(session) = serde_json::from_str::<Session>(&data) {
+                        let pc = count_unique_patents(&session);
+                        summaries.push(SessionSummary {
+                            session_id: session.session_id,
+                            topic: session.topic,
+                            created_at: session.created_at,
+                            modified_at: session.modified_at,
+                            query_count: session.queries.len(),
+                            patent_count: pc,
+                        });
+                    }
                 }
             }
-        }
 
-        summaries.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
-        if let Some(lim) = limit {
-            summaries.truncate(lim);
-        }
-        Ok(summaries)
+            summaries.sort_by(|a, b| b.modified_at.cmp(&a.modified_at));
+            if let Some(lim) = limit {
+                summaries.truncate(lim);
+            }
+            Ok(summaries)
+        })
+        .await?
     }
 
-    pub fn append_query_result(&self, session_id: &str, query: QueryRecord) -> Result<()> {
-        let mut session = self.load_session(session_id)?;
+    pub async fn append_query_result(&self, session_id: &str, query: QueryRecord) -> Result<()> {
+        let mut session = self.load_session(session_id).await?;
         session.queries.push(query);
-        self.save_session(&mut session)?;
+        self.save_session(&mut session).await?;
         Ok(())
     }
 
-    pub fn add_note(&self, session_id: &str, note: &str) -> Result<()> {
-        let mut session = self.load_session(session_id)?;
+    pub async fn add_note(&self, session_id: &str, note: &str) -> Result<()> {
+        let mut session = self.load_session(session_id).await?;
         if session.notes.is_empty() {
             session.notes = note.to_string();
         } else {
             session.notes = format!("{}\n\n{}", session.notes, note);
         }
-        self.save_session(&mut session)?;
+        self.save_session(&mut session).await?;
         Ok(())
     }
 
-    pub fn annotate_patent(
+    pub async fn annotate_patent(
         &self,
         session_id: &str,
         patent_id: &str,
         annotation: &str,
         relevance: &str,
     ) -> Result<()> {
-        let mut session = self.load_session(session_id)?;
+        let mut session = self.load_session(session_id).await?;
         let mut updated = false;
         for query in &mut session.queries {
             for hit in &mut query.results {
@@ -255,17 +306,21 @@ impl SessionManager {
             }
         }
         if updated {
-            self.save_session(&mut session)?;
+            self.save_session(&mut session).await?;
         }
         Ok(())
     }
 
-    pub fn export_markdown(&self, session_id: &str, output_path: Option<&Path>) -> Result<PathBuf> {
-        let session = self.load_session(session_id)?;
+    pub async fn export_markdown(
+        &self,
+        session_id: &str,
+        output_path: Option<&Path>,
+    ) -> Result<PathBuf> {
+        let session = self.load_session(session_id).await?;
 
         let output_path = match output_path {
             Some(p) => p.to_path_buf(),
-            None => self.dir.join(format!("{}-report.md", session_id)),
+            None => self.dir.join(format!("{}-report.md", session.session_id)),
         };
 
         if output_path.is_relative() {
@@ -287,17 +342,6 @@ impl SessionManager {
                     std::path::Component::CurDir => {}
                     std::path::Component::Prefix(_) | std::path::Component::RootDir => {}
                 }
-            }
-        } else if let Ok(canonical_path) = output_path.canonicalize() {
-            let canonical_dir = self.dir.canonicalize().unwrap_or_else(|_| self.dir.clone());
-            let canonical_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            if !canonical_path.starts_with(&canonical_dir)
-                && !canonical_path.starts_with(&canonical_cwd)
-            {
-                anyhow::bail!(
-                    "output_path escapes allowed directories: {}",
-                    output_path.display()
-                );
             }
         }
 
@@ -409,42 +453,30 @@ impl SessionManager {
         }
 
         let report = lines.join("\n");
-        fs::write(&output_path, &report)
-            .with_context(|| format!("Failed to write report: {}", output_path.display()))?;
-        Ok(output_path)
-    }
 
-    fn update_index(&self, session: &Session) -> Result<()> {
-        let index_path = self.dir.join(".index.json");
-
-        let mut existing: Vec<SessionSummary> = Vec::new();
-        if index_path.exists() {
-            if let Ok(data) = fs::read_to_string(&index_path) {
-                if let Ok(idx) = serde_json::from_str::<IndexFile>(&data) {
-                    existing = idx
-                        .sessions
-                        .into_iter()
-                        .filter(|s| s.session_id != session.session_id)
-                        .collect();
+        let dir = self.dir.clone();
+        let out_path = output_path.clone();
+        tokio::task::spawn_blocking(move || -> Result<PathBuf> {
+            if out_path.is_absolute() {
+                if let Ok(canonical_path) = out_path.canonicalize() {
+                    let canonical_dir = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+                    let canonical_cwd =
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+                    if !canonical_path.starts_with(&canonical_dir)
+                        && !canonical_path.starts_with(&canonical_cwd)
+                    {
+                        anyhow::bail!(
+                            "output_path escapes allowed directories: {}",
+                            out_path.display()
+                        );
+                    }
                 }
             }
-        }
-
-        existing.push(SessionSummary {
-            session_id: session.session_id.clone(),
-            topic: session.topic.clone(),
-            created_at: session.created_at.clone(),
-            modified_at: session.modified_at.clone(),
-            query_count: session.queries.len(),
-            patent_count: count_unique_patents(session),
-        });
-
-        let index = IndexFile { sessions: existing };
-        let content = serde_json::to_string_pretty(&index)?;
-        let tmp_path = self.dir.join(".index.json.tmp");
-        fs::write(&tmp_path, &content)?;
-        fs::rename(&tmp_path, &index_path)?;
-        Ok(())
+            fs::write(&out_path, &report)
+                .with_context(|| format!("Failed to write report: {}", out_path.display()))?;
+            Ok(out_path)
+        })
+        .await?
     }
 }
 
@@ -508,11 +540,12 @@ mod tests {
         assert_eq!(make_slug("foo-bar baz"), "foo-bar-baz");
     }
 
-    #[test]
-    fn create_session_persists() {
+    #[tokio::test]
+    async fn create_session_persists() {
         let (_tmp, mgr) = make_manager();
         let session = mgr
             .create_session("Wireless Charging", Some("2020-01-01"), "initial note")
+            .await
             .unwrap();
         assert!(session.session_id.contains("wireless-charging"));
         assert_eq!(session.topic, "Wireless Charging");
@@ -520,51 +553,51 @@ mod tests {
         assert_eq!(session.notes, "initial note");
         assert!(session.queries.is_empty());
 
-        let loaded = mgr.load_session(&session.session_id).unwrap();
+        let loaded = mgr.load_session(&session.session_id).await.unwrap();
         assert_eq!(loaded.session_id, session.session_id);
         assert_eq!(loaded.topic, session.topic);
     }
 
-    #[test]
-    fn load_session_not_found() {
+    #[tokio::test]
+    async fn load_session_not_found() {
         let (_tmp, mgr) = make_manager();
-        let result = mgr.load_session("nonexistent");
+        let result = mgr.load_session("nonexistent").await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn save_session_updates_modified_at() {
+    #[tokio::test]
+    async fn save_session_updates_modified_at() {
         let (_tmp, mgr) = make_manager();
-        let session = mgr.create_session("Test", None, "").unwrap();
+        let session = mgr.create_session("Test", None, "").await.unwrap();
         let first_modified = session.modified_at.clone();
 
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        let mut session2 = mgr.load_session(&session.session_id).unwrap();
+        let mut session2 = mgr.load_session(&session.session_id).await.unwrap();
         session2.notes = "updated".to_string();
-        mgr.save_session(&mut session2).unwrap();
+        mgr.save_session(&mut session2).await.unwrap();
 
-        let reloaded = mgr.load_session(&session.session_id).unwrap();
+        let reloaded = mgr.load_session(&session.session_id).await.unwrap();
         assert_ne!(reloaded.modified_at, first_modified);
         assert_eq!(reloaded.notes, "updated");
     }
 
-    #[test]
-    fn atomic_write_no_leftover_tmp() {
+    #[tokio::test]
+    async fn atomic_write_no_leftover_tmp() {
         let (_tmp, mgr) = make_manager();
-        let session = mgr.create_session("Atomic", None, "").unwrap();
+        let session = mgr.create_session("Atomic", None, "").await.unwrap();
 
         let tmp_path = mgr.dir.join(format!("{}.json.tmp", session.session_id));
         assert!(!tmp_path.exists(), "tmp file should not remain after save");
     }
 
-    #[test]
-    fn list_sessions_returns_created() {
+    #[tokio::test]
+    async fn list_sessions_returns_created() {
         let (_tmp, mgr) = make_manager();
-        mgr.create_session("Alpha", None, "").unwrap();
-        mgr.create_session("Beta", None, "").unwrap();
+        mgr.create_session("Alpha", None, "").await.unwrap();
+        mgr.create_session("Beta", None, "").await.unwrap();
 
-        let summaries = mgr.list_sessions(None).unwrap();
+        let summaries = mgr.list_sessions(None).await.unwrap();
         assert_eq!(summaries.len(), 2);
 
         let ids: Vec<&str> = summaries.iter().map(|s| s.session_id.as_str()).collect();
@@ -572,29 +605,31 @@ mod tests {
         assert!(ids.iter().any(|id| id.contains("beta")));
     }
 
-    #[test]
-    fn list_sessions_limit() {
+    #[tokio::test]
+    async fn list_sessions_limit() {
         let (_tmp, mgr) = make_manager();
-        mgr.create_session("A", None, "").unwrap();
-        mgr.create_session("B", None, "").unwrap();
-        mgr.create_session("C", None, "").unwrap();
+        mgr.create_session("A", None, "").await.unwrap();
+        mgr.create_session("B", None, "").await.unwrap();
+        mgr.create_session("C", None, "").await.unwrap();
 
-        let summaries = mgr.list_sessions(Some(2)).unwrap();
+        let summaries = mgr.list_sessions(Some(2)).await.unwrap();
         assert_eq!(summaries.len(), 2);
     }
 
-    #[test]
-    fn list_sessions_sorted_by_modified_desc() {
+    #[tokio::test]
+    async fn list_sessions_sorted_by_modified_desc() {
         let (_tmp, mgr) = make_manager();
-        let s1 = mgr.create_session("First", None, "").unwrap();
+        let s1 = mgr.create_session("First", None, "").await.unwrap();
 
         std::thread::sleep(std::time::Duration::from_millis(10));
 
-        mgr.add_note(&s1.session_id, "update first").unwrap();
+        mgr.add_note(&s1.session_id, "update first")
+            .await
+            .unwrap();
 
-        let _s2 = mgr.create_session("Second", None, "").unwrap();
+        let _s2 = mgr.create_session("Second", None, "").await.unwrap();
 
-        let summaries = mgr.list_sessions(None).unwrap();
+        let summaries = mgr.list_sessions(None).await.unwrap();
         assert_eq!(summaries.len(), 2);
         assert!(
             summaries[0].modified_at >= summaries[1].modified_at,
@@ -602,60 +637,69 @@ mod tests {
         );
     }
 
-    #[test]
-    fn append_query_result() {
+    #[tokio::test]
+    async fn append_query_result() {
         let (_tmp, mgr) = make_manager();
-        let session = mgr.create_session("QueryTest", None, "").unwrap();
+        let session = mgr.create_session("QueryTest", None, "").await.unwrap();
 
         let hit = make_hit("US1234567");
         let query = make_query("q001", vec![hit]);
-        mgr.append_query_result(&session.session_id, query).unwrap();
+        mgr.append_query_result(&session.session_id, query)
+            .await
+            .unwrap();
 
-        let loaded = mgr.load_session(&session.session_id).unwrap();
+        let loaded = mgr.load_session(&session.session_id).await.unwrap();
         assert_eq!(loaded.queries.len(), 1);
         assert_eq!(loaded.queries[0].query_id, "q001");
         assert_eq!(loaded.queries[0].results.len(), 1);
         assert_eq!(loaded.queries[0].results[0].patent_id, "US1234567");
     }
 
-    #[test]
-    fn add_note_appends() {
+    #[tokio::test]
+    async fn add_note_appends() {
         let (_tmp, mgr) = make_manager();
-        let session = mgr.create_session("Notes", None, "").unwrap();
+        let session = mgr.create_session("Notes", None, "").await.unwrap();
 
-        mgr.add_note(&session.session_id, "first note").unwrap();
-        mgr.add_note(&session.session_id, "second note").unwrap();
+        mgr.add_note(&session.session_id, "first note")
+            .await
+            .unwrap();
+        mgr.add_note(&session.session_id, "second note")
+            .await
+            .unwrap();
 
-        let loaded = mgr.load_session(&session.session_id).unwrap();
+        let loaded = mgr.load_session(&session.session_id).await.unwrap();
         assert_eq!(loaded.notes, "first note\n\nsecond note");
     }
 
-    #[test]
-    fn add_note_to_empty_notes() {
+    #[tokio::test]
+    async fn add_note_to_empty_notes() {
         let (_tmp, mgr) = make_manager();
-        let session = mgr.create_session("EmptyNotes", None, "").unwrap();
+        let session = mgr.create_session("EmptyNotes", None, "").await.unwrap();
         assert_eq!(session.notes, "");
 
-        mgr.add_note(&session.session_id, "hello").unwrap();
+        mgr.add_note(&session.session_id, "hello").await.unwrap();
 
-        let loaded = mgr.load_session(&session.session_id).unwrap();
+        let loaded = mgr.load_session(&session.session_id).await.unwrap();
         assert_eq!(loaded.notes, "hello");
     }
 
-    #[test]
-    fn annotate_patent_updates_hit() {
+    #[tokio::test]
+    async fn annotate_patent_updates_hit() {
         let (_tmp, mgr) = make_manager();
-        let session = mgr.create_session("Annotate", None, "").unwrap();
+        let session = mgr.create_session("Annotate", None, "").await.unwrap();
 
         let mut hit = make_hit("US9999999");
         hit.title = Some("Test Patent".to_string());
         let query = make_query("q001", vec![hit]);
-        mgr.append_query_result(&session.session_id, query).unwrap();
-
-        mgr.annotate_patent(&session.session_id, "US9999999", "key reference", "high")
+        mgr.append_query_result(&session.session_id, query)
+            .await
             .unwrap();
 
-        let loaded = mgr.load_session(&session.session_id).unwrap();
+        mgr.annotate_patent(&session.session_id, "US9999999", "key reference", "high")
+            .await
+            .unwrap();
+
+        let loaded = mgr.load_session(&session.session_id).await.unwrap();
         let found = loaded.queries[0]
             .results
             .iter()
@@ -665,28 +709,29 @@ mod tests {
         assert_eq!(found.relevance, "high");
     }
 
-    #[test]
-    fn annotate_patent_no_match_no_save() {
+    #[tokio::test]
+    async fn annotate_patent_no_match_no_save() {
         let (_tmp, mgr) = make_manager();
-        let session = mgr.create_session("NoMatch", None, "").unwrap();
+        let session = mgr.create_session("NoMatch", None, "").await.unwrap();
         let before = session.modified_at.clone();
 
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         mgr.annotate_patent(&session.session_id, "US0000000", "note", "low")
+            .await
             .unwrap();
 
-        let after = mgr.load_session(&session.session_id).unwrap();
+        let after = mgr.load_session(&session.session_id).await.unwrap();
         assert_eq!(
             after.modified_at, before,
             "should not save if no patent matched"
         );
     }
 
-    #[test]
-    fn index_file_updated() {
+    #[tokio::test]
+    async fn index_file_updated() {
         let (_tmp, mgr) = make_manager();
-        let session = mgr.create_session("Indexed", None, "").unwrap();
+        let session = mgr.create_session("Indexed", None, "").await.unwrap();
 
         let index_path = mgr.dir.join(".index.json");
         assert!(index_path.exists());
@@ -697,14 +742,14 @@ mod tests {
         assert_eq!(idx.sessions[0].session_id, session.session_id);
     }
 
-    #[test]
-    fn index_file_deduplicates_on_save() {
+    #[tokio::test]
+    async fn index_file_deduplicates_on_save() {
         let (_tmp, mgr) = make_manager();
-        let session = mgr.create_session("Dedup", None, "").unwrap();
+        let session = mgr.create_session("Dedup", None, "").await.unwrap();
 
-        let mut loaded = mgr.load_session(&session.session_id).unwrap();
+        let mut loaded = mgr.load_session(&session.session_id).await.unwrap();
         loaded.notes = "updated".to_string();
-        mgr.save_session(&mut loaded).unwrap();
+        mgr.save_session(&mut loaded).await.unwrap();
 
         let index_path = mgr.dir.join(".index.json");
         let data = fs::read_to_string(&index_path).unwrap();
@@ -717,20 +762,24 @@ mod tests {
         assert_eq!(count, 1, "session should appear exactly once in index");
     }
 
-    #[test]
-    fn session_summary_counts() {
+    #[tokio::test]
+    async fn session_summary_counts() {
         let (_tmp, mgr) = make_manager();
-        let session = mgr.create_session("Counts", None, "").unwrap();
+        let session = mgr.create_session("Counts", None, "").await.unwrap();
 
         let h1 = make_hit("US111");
         let h2 = make_hit("US222");
         let h3 = make_hit("US111");
         let q1 = make_query("q001", vec![h1, h2]);
         let q2 = make_query("q002", vec![h3]);
-        mgr.append_query_result(&session.session_id, q1).unwrap();
-        mgr.append_query_result(&session.session_id, q2).unwrap();
+        mgr.append_query_result(&session.session_id, q1)
+            .await
+            .unwrap();
+        mgr.append_query_result(&session.session_id, q2)
+            .await
+            .unwrap();
 
-        let summaries = mgr.list_sessions(None).unwrap();
+        let summaries = mgr.list_sessions(None).await.unwrap();
         let s = summaries
             .iter()
             .find(|s| s.session_id == session.session_id)
@@ -742,11 +791,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn export_markdown_default_path() {
+    #[tokio::test]
+    async fn export_markdown_default_path() {
         let (_tmp, mgr) = make_manager();
         let session = mgr
             .create_session("Export", Some("2019-06-01"), "research notes")
+            .await
             .unwrap();
 
         let mut hit = make_hit("US111");
@@ -754,9 +804,14 @@ mod tests {
         hit.date = Some("2018-03-15".to_string());
         hit.relevance = "high".to_string();
         let query = make_query("q001", vec![hit]);
-        mgr.append_query_result(&session.session_id, query).unwrap();
+        mgr.append_query_result(&session.session_id, query)
+            .await
+            .unwrap();
 
-        let output = mgr.export_markdown(&session.session_id, None).unwrap();
+        let output = mgr
+            .export_markdown(&session.session_id, None)
+            .await
+            .unwrap();
         assert!(output.exists());
         assert_eq!(
             output.file_name().unwrap().to_string_lossy(),
@@ -775,23 +830,24 @@ mod tests {
         assert!(content.contains("q001"));
     }
 
-    #[test]
-    fn export_markdown_custom_path() {
+    #[tokio::test]
+    async fn export_markdown_custom_path() {
         let (_tmp, mgr) = make_manager();
-        let session = mgr.create_session("Custom", None, "").unwrap();
+        let session = mgr.create_session("Custom", None, "").await.unwrap();
         let custom = _tmp.path().join("custom-report.md");
 
         let output = mgr
             .export_markdown(&session.session_id, Some(&custom))
+            .await
             .unwrap();
         assert_eq!(output, custom);
         assert!(custom.exists());
     }
 
-    #[test]
-    fn export_markdown_relevance_sorting() {
+    #[tokio::test]
+    async fn export_markdown_relevance_sorting() {
         let (_tmp, mgr) = make_manager();
-        let session = mgr.create_session("Sort", None, "").unwrap();
+        let session = mgr.create_session("Sort", None, "").await.unwrap();
 
         let mut h1 = make_hit("US_LOW");
         h1.relevance = "low".to_string();
@@ -802,9 +858,14 @@ mod tests {
         h2.title = Some("High Patent".to_string());
 
         let query = make_query("q001", vec![h1, h2]);
-        mgr.append_query_result(&session.session_id, query).unwrap();
+        mgr.append_query_result(&session.session_id, query)
+            .await
+            .unwrap();
 
-        let output = mgr.export_markdown(&session.session_id, None).unwrap();
+        let output = mgr
+            .export_markdown(&session.session_id, None)
+            .await
+            .unwrap();
         let content = fs::read_to_string(&output).unwrap();
 
         let high_pos = content.find("US_HIGH").unwrap();
@@ -815,26 +876,32 @@ mod tests {
         );
     }
 
-    #[test]
-    fn export_markdown_pipe_escaping() {
+    #[tokio::test]
+    async fn export_markdown_pipe_escaping() {
         let (_tmp, mgr) = make_manager();
-        let session = mgr.create_session("Pipe", None, "").unwrap();
+        let session = mgr.create_session("Pipe", None, "").await.unwrap();
 
         let mut hit = make_hit("US111");
         hit.title = Some("A|B|C".to_string());
         let query = make_query("q001", vec![hit]);
-        mgr.append_query_result(&session.session_id, query).unwrap();
+        mgr.append_query_result(&session.session_id, query)
+            .await
+            .unwrap();
 
-        let output = mgr.export_markdown(&session.session_id, None).unwrap();
+        let output = mgr
+            .export_markdown(&session.session_id, None)
+            .await
+            .unwrap();
         let content = fs::read_to_string(&output).unwrap();
         assert!(content.contains("A\\|B\\|C"));
     }
 
-    #[test]
-    fn serde_roundtrip_session() {
+    #[tokio::test]
+    async fn serde_roundtrip_session() {
         let (_tmp, mgr) = make_manager();
         let session = mgr
             .create_session("Roundtrip", Some("2021-12-31"), "test notes")
+            .await
             .unwrap();
 
         let mut hit = make_hit("US9999");
@@ -852,15 +919,20 @@ mod tests {
             results: vec![hit],
             metadata: Some(serde_json::json!({"key": "value"})),
         };
-        mgr.append_query_result(&session.session_id, query).unwrap();
+        mgr.append_query_result(&session.session_id, query)
+            .await
+            .unwrap();
 
-        let loaded = mgr.load_session(&session.session_id).unwrap();
+        let loaded = mgr.load_session(&session.session_id).await.unwrap();
         assert_eq!(loaded.topic, "Roundtrip");
         assert_eq!(loaded.prior_art_cutoff.as_deref(), Some("2021-12-31"));
         assert_eq!(loaded.notes, "test notes");
         assert_eq!(loaded.queries.len(), 1);
         assert_eq!(loaded.queries[0].source, "EPO_OPS");
-        assert_eq!(loaded.queries[0].results[0].inventors, vec!["Alice", "Bob"]);
+        assert_eq!(
+            loaded.queries[0].results[0].inventors,
+            vec!["Alice", "Bob"]
+        );
         assert_eq!(loaded.queries[0].results[0].prior_art, Some(true));
         assert_eq!(
             loaded.queries[0].metadata,
@@ -893,12 +965,15 @@ mod tests {
         assert_eq!(roundtrip.inventors, hit.inventors);
     }
 
-    #[test]
-    fn empty_session_export() {
+    #[tokio::test]
+    async fn empty_session_export() {
         let (_tmp, mgr) = make_manager();
-        let session = mgr.create_session("Empty", None, "").unwrap();
+        let session = mgr.create_session("Empty", None, "").await.unwrap();
 
-        let output = mgr.export_markdown(&session.session_id, None).unwrap();
+        let output = mgr
+            .export_markdown(&session.session_id, None)
+            .await
+            .unwrap();
         let content = fs::read_to_string(&output).unwrap();
         assert!(content.contains("# Patent Search Report: Empty"));
         assert!(content.contains("## Summary"));
@@ -908,30 +983,36 @@ mod tests {
         assert!(!content.contains("## Researcher Notes"));
     }
 
-    #[test]
-    fn list_sessions_fallback_without_index() {
+    #[tokio::test]
+    async fn list_sessions_fallback_without_index() {
         let (_tmp, mgr) = make_manager();
-        let session = mgr.create_session("Fallback", None, "").unwrap();
+        let session = mgr.create_session("Fallback", None, "").await.unwrap();
 
         let index_path = mgr.dir.join(".index.json");
         fs::remove_file(&index_path).unwrap();
 
-        let summaries = mgr.list_sessions(None).unwrap();
+        let summaries = mgr.list_sessions(None).await.unwrap();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].session_id, session.session_id);
     }
 
-    #[test]
-    fn classifications_in_export() {
+    #[tokio::test]
+    async fn classifications_in_export() {
         let (_tmp, mgr) = make_manager();
-        let mut session = mgr.create_session("Class", None, "").unwrap();
+        let mut session = mgr.create_session("Class", None, "").await.unwrap();
         session.classifications_explored = vec!["H02J50".to_string(), "H01F38".to_string()];
-        mgr.save_session(&mut session).unwrap();
+        mgr.save_session(&mut session).await.unwrap();
 
         let loaded = mgr
-            .load_session(&mgr.list_sessions(None).unwrap()[0].session_id)
+            .load_session(
+                &mgr.list_sessions(None).await.unwrap()[0].session_id,
+            )
+            .await
             .unwrap();
-        let output = mgr.export_markdown(&loaded.session_id, None).unwrap();
+        let output = mgr
+            .export_markdown(&loaded.session_id, None)
+            .await
+            .unwrap();
         let content = fs::read_to_string(&output).unwrap();
         assert!(content.contains("H02J50"));
         assert!(content.contains("H01F38"));
@@ -946,13 +1027,13 @@ mod tests {
         std::env::remove_var("PATENT_SESSIONS_DIR");
     }
 
-    #[test]
-    fn session_id_rejects_path_traversal() {
+    #[tokio::test]
+    async fn session_id_rejects_path_traversal() {
         let (_tmp, mgr) = make_manager();
-        assert!(mgr.load_session("../../etc/passwd").is_err());
-        assert!(mgr.load_session("foo/bar").is_err());
-        assert!(mgr.load_session("foo\\bar").is_err());
-        assert!(mgr.load_session("..").is_err());
-        assert!(mgr.load_session("").is_err());
+        assert!(mgr.load_session("../../etc/passwd").await.is_err());
+        assert!(mgr.load_session("foo/bar").await.is_err());
+        assert!(mgr.load_session("foo\\bar").await.is_err());
+        assert!(mgr.load_session("..").await.is_err());
+        assert!(mgr.load_session("").await.is_err());
     }
 }

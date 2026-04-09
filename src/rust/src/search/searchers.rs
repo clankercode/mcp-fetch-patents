@@ -44,6 +44,7 @@ impl SerpApiGooglePatentsBackend {
         }
     }
 
+    #[tracing::instrument(skip_all)]
     #[allow(clippy::too_many_arguments)]
     pub async fn search(
         &self,
@@ -191,6 +192,7 @@ impl UsptoTextSearchBackend {
         }
     }
 
+    #[tracing::instrument(skip_all)]
     pub async fn search(
         &self,
         query: &str,
@@ -426,6 +428,7 @@ impl EpoOpsSearchBackend {
         Ok(token)
     }
 
+    #[tracing::instrument(skip_all)]
     pub async fn search(
         &self,
         query: &str,
@@ -523,6 +526,7 @@ impl EpoOpsSearchBackend {
             .await
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn get_citations(
         &self,
         patent_id: &str,
@@ -597,6 +601,7 @@ impl EpoOpsSearchBackend {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn get_family(
         &self,
         patent_id: &str,

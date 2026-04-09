@@ -19,6 +19,7 @@ from tenacity import (
 
 from patent_mcp.cache import PatentMetadata, SessionCache, SourceAttempt
 from patent_mcp.fetchers.base import BasePatentSource, FetchResult
+from patent_mcp.utils import now_iso
 
 if TYPE_CHECKING:
     from patent_mcp.config import PatentConfig
@@ -59,10 +60,6 @@ def _retry_decorator():
         wait=wait_exponential(multiplier=1, min=1, max=8),
         reraise=True,
     )
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +213,7 @@ class PpubsSource(BasePatentSource):
             filing_date=doc.get("filingDate"),
             publication_date=doc.get("publicationDate"),
             grant_date=doc.get("grantDate"),
-            fetched_at=_now_iso(),
+            fetched_at=now_iso(),
         )
         return guid, txt_content, meta
 
@@ -420,7 +417,7 @@ class EpoOpsSource(BasePatentSource):
                 filing_date=_get_date("ep:filing-date"),
                 publication_date=_get_date("ep:date-of-publication"),
                 grant_date=_get_date("ep:date-of-grant"),
-                fetched_at=_now_iso(),
+                fetched_at=now_iso(),
             )
         except ET.ParseError:
             return None
@@ -539,7 +536,7 @@ LIMIT 5
             filing_date=_parse_bq_date(row.get("filing_date")),
             publication_date=_parse_bq_date(row.get("publication_date")),
             grant_date=_parse_bq_date(row.get("grant_date")),
-            fetched_at=_now_iso(),
+            fetched_at=now_iso(),
         )
 
     async def fetch(self, patent: "CanonicalPatentId", output_dir: Path) -> FetchResult:
@@ -627,7 +624,7 @@ class EspacenetSource(BasePatentSource):
                 jurisdiction=patent.jurisdiction,
                 doc_type=patent.doc_type,
                 title=title,
-                fetched_at=_now_iso(),
+                fetched_at=now_iso(),
             )
             attempt.success = True
             attempt.elapsed_ms = (time.monotonic() - start) * 1000
@@ -693,7 +690,7 @@ class WipoScrapeSource(BasePatentSource):
                 jurisdiction="WO",
                 doc_type="application",
                 title=title,
-                fetched_at=_now_iso(),
+                fetched_at=now_iso(),
             )
             attempt.success = True
             attempt.elapsed_ms = (time.monotonic() - start) * 1000
@@ -745,7 +742,7 @@ class IpAustraliaSource(BasePatentSource):
                 filing_date=data.get("filingDate"),
                 publication_date=data.get("publicationDate"),
                 grant_date=data.get("grantDate"),
-                fetched_at=_now_iso(),
+                fetched_at=now_iso(),
             )
             attempt.success = True
             attempt.elapsed_ms = (time.monotonic() - start) * 1000
@@ -800,7 +797,7 @@ class CipoScrapeSource(BasePatentSource):
                 jurisdiction="CA",
                 doc_type=patent.doc_type,
                 title=title,
-                fetched_at=_now_iso(),
+                fetched_at=now_iso(),
             )
             attempt.success = True
             attempt.elapsed_ms = (time.monotonic() - start) * 1000
@@ -861,7 +858,7 @@ class GooglePatentsSource(BasePatentSource):
             assignee=browser_result.assignee,
             filing_date=browser_result.filing_date,
             publication_date=browser_result.publication_date,
-            fetched_at=_now_iso(),
+            fetched_at=now_iso(),
         )
         pdf_path = Path(browser_result.pdf_path) if browser_result.pdf_path else None
         txt_path = Path(browser_result.txt_path) if browser_result.txt_path else None

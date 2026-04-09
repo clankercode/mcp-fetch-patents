@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::Write;
 use std::collections::HashMap;
+use tracing::warn;
 
 use crate::config::PatentConfig;
 
@@ -475,7 +476,7 @@ fn route_line(line: &str) -> Dispatch {
 // Async tool execution
 // ---------------------------------------------------------------------------
 
-fn append_search_to_session(
+async fn append_search_to_session(
     sm: &crate::search::session_manager::SessionManager,
     session_id: &str,
     query_text: &str,
@@ -484,7 +485,7 @@ fn append_search_to_session(
     metadata: Option<serde_json::Value>,
     extra_classifications: Option<&[String]>,
 ) -> anyhow::Result<()> {
-    let mut session = sm.load_session(session_id)?;
+    let mut session = sm.load_session(session_id).await?;
     let now = chrono::Utc::now().to_rfc3339();
     let query_num = session.queries.len() + 1;
     let results: Vec<crate::ranking::PatentHit> =
@@ -506,7 +507,7 @@ fn append_search_to_session(
             }
         }
     }
-    sm.save_session(&mut session)?;
+    sm.save_session(&mut session).await?;
     Ok(())
 }
 
@@ -527,6 +528,7 @@ struct SearchBackends {
     browser_config: BrowserBackendConfig,
 }
 
+#[tracing::instrument(skip_all)]
 async fn execute_tool_call(
     id: Value,
     params: Value,
@@ -699,7 +701,7 @@ async fn execute_tool_call(
                         }
                         let hits = serp.search(
                             &variant.query, None, date_cutoff.as_deref(), None, None, None, max_results,
-                        ).await.unwrap_or_default();
+                        ).await.unwrap_or_else(|e| { warn!("SerpAPI search failed: {}", e); vec![] });
                         let count = hits.len();
                         queries_run.push(serde_json::json!({
                             "source": "Google_Patents_SerpAPI",
@@ -768,7 +770,7 @@ async fn execute_tool_call(
                             "query_variants": intent.query_variants.iter().map(|v| &v.query).collect::<Vec<_>>(),
                         })),
                         None,
-                    );
+                    ).await;
                 }
             }
 
@@ -824,13 +826,13 @@ async fn execute_tool_call(
                     if !want_uspto { return (vec![], None); }
                     let df = date_from.as_deref().map(|s| s.replace("-", ""));
                     let dt = date_to.as_deref().map(|s| s.replace("-", ""));
-                    let hits = backends.uspto.search(&query, df.as_deref(), dt.as_deref(), max_results).await.unwrap_or_default();
+                    let hits = backends.uspto.search(&query, df.as_deref(), dt.as_deref(), max_results).await.unwrap_or_else(|e| { warn!("USPTO search failed: {}", e); vec![] });
                     let qr = Some(serde_json::json!({"source": "USPTO", "query": query, "result_count": hits.len()}));
                     (hits, qr)
                 },
                 async {
                     if !want_epo { return (vec![], None); }
-                    let hits = backends.epo.search(&query, date_from.as_deref(), date_to.as_deref(), max_results).await.unwrap_or_default();
+                    let hits = backends.epo.search(&query, date_from.as_deref(), date_to.as_deref(), max_results).await.unwrap_or_else(|e| { warn!("EPO OPS search failed: {}", e); vec![] });
                     let qr = Some(serde_json::json!({"source": "EPO_OPS", "query": query, "result_count": hits.len()}));
                     (hits, qr)
                 },
@@ -840,7 +842,7 @@ async fn execute_tool_call(
                         Some(s) => s,
                         None => return (vec![], None),
                     };
-                    let hits = serp.search(&query, date_from.as_deref(), date_to.as_deref(), None, None, None, max_results).await.unwrap_or_default();
+                    let hits = serp.search(&query, date_from.as_deref(), date_to.as_deref(), None, None, None, max_results).await.unwrap_or_else(|e| { warn!("SerpAPI search failed: {}", e); vec![] });
                     let qr = Some(serde_json::json!({"source": "Google_Patents", "query": query, "result_count": hits.len()}));
                     (hits, qr)
                 },
@@ -871,7 +873,7 @@ async fn execute_tool_call(
                             "sources": sources,
                         })),
                         None,
-                    );
+                    ).await;
                 }
             }
 
@@ -914,7 +916,7 @@ async fn execute_tool_call(
             };
 
             for dir_ in directions {
-                let level_1 = epo.get_citations(&patent_id, dir_).await.unwrap_or_default();
+                let level_1 = epo.get_citations(&patent_id, dir_).await.unwrap_or_else(|e| { warn!("EPO OPS get_citations failed for {}: {}", patent_id, e); vec![] });
                 let mut entry = serde_json::json!({"level_1": level_1});
                 if depth >= 2 {
                     let mut level_2: Vec<String> = Vec::new();
@@ -923,7 +925,7 @@ async fn execute_tool_call(
                         for pid_val in l1.iter().take(10) {
                             if let Some(pid) = pid_val.as_str() {
                                 seen.insert(pid.to_string());
-                                let more = epo.get_citations(pid, dir_).await.unwrap_or_default();
+                                let more = epo.get_citations(pid, dir_).await.unwrap_or_else(|e| { warn!("EPO OPS get_citations failed for {}: {}", pid, e); vec![] });
                                 level_2.extend(more);
                             }
                         }
@@ -939,14 +941,14 @@ async fn execute_tool_call(
 
             if let Some(ref sid) = session_id {
                 let sm = &backends.session_manager;
-                if let Ok(mut session) = sm.load_session(sid) {
+                if let Ok(mut session) = sm.load_session(sid).await {
                     let map = session.citation_chains.as_object_mut();
                     if let Some(map) = map {
                         map.insert(patent_id_for_session.clone(), serde_json::json!(citations_snapshot));
                     } else {
                         session.citation_chains = serde_json::json!({patent_id_for_session: citations_snapshot});
                     }
-                    let _ = sm.save_session(&mut session);
+                    let _ = sm.save_session(&mut session).await;
                 }
             }
 
@@ -974,7 +976,7 @@ async fn execute_tool_call(
             let hits = epo
                 .search_by_classification(&code, include_subclasses, date_from.as_deref(), date_to.as_deref(), max_results)
                 .await
-                .unwrap_or_default();
+                .unwrap_or_else(|e| { warn!("EPO OPS classification search failed for {}: {}", code, e); vec![] });
 
             if let Some(ref sid) = session_id {
                 if !hits.is_empty() {
@@ -990,7 +992,7 @@ async fn execute_tool_call(
                             "include_subclasses": include_subclasses,
                         })),
                         Some(std::slice::from_ref(&code)),
-                    );
+                    ).await;
                 }
             }
 
@@ -1020,17 +1022,17 @@ async fn execute_tool_call(
             let session_id = get_str_param(&params, "session_id");
 
             let epo = &backends.epo;
-            let members = epo.get_family(&patent_id).await.unwrap_or_default();
+            let members = epo.get_family(&patent_id).await.unwrap_or_else(|e| { warn!("EPO OPS get_family failed for {}: {}", patent_id, e); vec![] });
 
             if let Some(ref sid) = session_id {
                 if !members.is_empty() {
                     let sm = &backends.session_manager;
-                    if let Ok(mut session) = sm.load_session(sid) {
+                    if let Ok(mut session) = sm.load_session(sid).await {
                         session.patent_families.insert(
                             patent_id.clone(),
                             members.iter().filter_map(|m| m.get("patent_id").and_then(|v| v.as_str()).map(String::from)).collect(),
                         );
-                        let _ = sm.save_session(&mut session);
+                        let _ = sm.save_session(&mut session).await;
                     }
                 }
             }
@@ -1111,7 +1113,7 @@ async fn execute_tool_call(
             let notes = get_str_param(&params, "notes").unwrap_or_default();
 
             let sm = &backends.session_manager;
-            match sm.create_session(&topic, prior_art_cutoff.as_deref(), &notes) {
+            match sm.create_session(&topic, prior_art_cutoff.as_deref(), &notes).await {
                 Ok(session) => {
                     let payload = serde_json::json!({
                         "session_id": session.session_id,
@@ -1132,7 +1134,7 @@ async fn execute_tool_call(
             let session_id = get_str_param(&params, "session_id").unwrap_or_default();
 
             let sm = &backends.session_manager;
-            match sm.load_session(&session_id) {
+            match sm.load_session(&session_id).await {
                 Ok(session) => {
                     let payload = serde_json::to_value(&session).unwrap_or(Value::Null);
                     RpcResponse::ok(id, serde_json::json!({
@@ -1148,7 +1150,7 @@ async fn execute_tool_call(
             let limit = get_int_param(&params, "limit").map(|n| n as usize);
 
             let sm = &backends.session_manager;
-            let summaries = sm.list_sessions(limit).unwrap_or_default();
+            let summaries = sm.list_sessions(limit).await.unwrap_or_default();
             let payload = serde_json::json!({
                 "sessions": summaries,
                 "total": summaries.len(),
@@ -1163,7 +1165,7 @@ async fn execute_tool_call(
             let note = get_str_param(&params, "note").unwrap_or_default();
 
             let sm = &backends.session_manager;
-            match sm.add_note(&session_id, &note) {
+            match sm.add_note(&session_id, &note).await {
                 Ok(()) => {
                     let payload = serde_json::json!({"status": "note added", "session_id": session_id});
                     RpcResponse::ok(id, serde_json::json!({
@@ -1181,7 +1183,7 @@ async fn execute_tool_call(
             let relevance = get_str_param(&params, "relevance").unwrap_or_else(|| "high".to_string());
 
             let sm = &backends.session_manager;
-            match sm.annotate_patent(&session_id, &patent_id, &annotation, &relevance) {
+            match sm.annotate_patent(&session_id, &patent_id, &annotation, &relevance).await {
                 Ok(()) => {
                     let payload = serde_json::json!({
                         "session_id": session_id,
@@ -1202,7 +1204,7 @@ async fn execute_tool_call(
             let output_path = get_str_param(&params, "output_path").map(std::path::PathBuf::from);
 
             let sm = &backends.session_manager;
-            match sm.export_markdown(&session_id, output_path.as_deref()) {
+            match sm.export_markdown(&session_id, output_path.as_deref()).await {
                 Ok(path) => {
                     let payload = serde_json::json!({
                         "report_path": path.to_string_lossy(),
@@ -1292,6 +1294,7 @@ async fn execute_tool_call(
 // ---------------------------------------------------------------------------
 
 /// Run the MCP server on stdin/stdout until EOF.
+#[tracing::instrument(skip_all)]
 pub async fn run_server(config: PatentConfig) -> Result<()> {
     use crate::cache::PatentCache;
     use crate::fetchers::FetcherOrchestrator;
@@ -1599,12 +1602,12 @@ mod tests {
         }
     }
 
-    #[test]
-    fn parity_session_create_shape_via_session_manager() {
+    #[tokio::test]
+    async fn parity_session_create_and_list() {
         let tmp = tempfile::tempdir().unwrap();
         let sm = crate::search::session_manager::SessionManager::new(Some(tmp.path().to_path_buf()));
 
-        let session = sm.create_session("wireless-charging", Some("2020-01-01"), "test notes").unwrap();
+        let session = sm.create_session("wireless-charging", Some("2020-01-01"), "test notes").await.unwrap();
         assert!(session.session_id.contains("wireless-charging"));
         assert_eq!(session.topic, "wireless-charging");
         assert_eq!(session.prior_art_cutoff.as_deref(), Some("2020-01-01"));
@@ -1616,19 +1619,19 @@ mod tests {
         assert!(session.citation_chains.is_object());
         assert!(session.patent_families.is_empty());
 
-        let loaded = sm.load_session(&session.session_id).unwrap();
+        let loaded = sm.load_session(&session.session_id).await.unwrap();
         assert_eq!(loaded.session_id, session.session_id);
         assert_eq!(loaded.topic, session.topic);
     }
 
-    #[test]
-    fn parity_session_list_shape() {
+    #[tokio::test]
+    async fn parity_session_list_shape() {
         let tmp = tempfile::tempdir().unwrap();
         let sm = crate::search::session_manager::SessionManager::new(Some(tmp.path().to_path_buf()));
-        sm.create_session("test-1", None, "").unwrap();
-        sm.create_session("test-2", None, "").unwrap();
+        sm.create_session("test-1", None, "").await.unwrap();
+        sm.create_session("test-2", None, "").await.unwrap();
 
-        let summaries = sm.list_sessions(None).unwrap();
+        let summaries = sm.list_sessions(None).await.unwrap();
         assert_eq!(summaries.len(), 2);
         for s in &summaries {
             assert!(!s.session_id.is_empty());
@@ -1638,11 +1641,11 @@ mod tests {
         }
     }
 
-    #[test]
-    fn parity_session_note_and_annotate() {
+    #[tokio::test]
+    async fn parity_session_note_and_annotate() {
         let tmp = tempfile::tempdir().unwrap();
         let sm = crate::search::session_manager::SessionManager::new(Some(tmp.path().to_path_buf()));
-        let session = sm.create_session("test-note", None, "").unwrap();
+        let session = sm.create_session("test-note", None, "").await.unwrap();
         let sid = &session.session_id;
 
         let hit = crate::search::session_manager::PatentHit {
@@ -1667,87 +1670,87 @@ mod tests {
             results: vec![hit],
             metadata: None,
         };
-        sm.append_query_result(sid, record).unwrap();
+        sm.append_query_result(sid, record).await.unwrap();
 
-        sm.add_note(sid, "first note").unwrap();
-        let loaded = sm.load_session(sid).unwrap();
+        sm.add_note(sid, "first note").await.unwrap();
+        let loaded = sm.load_session(sid).await.unwrap();
         assert!(loaded.notes.contains("first note"));
 
-        sm.annotate_patent(sid, "US1234567", "highly relevant", "high").unwrap();
-        let loaded = sm.load_session(sid).unwrap();
+        sm.annotate_patent(sid, "US1234567", "highly relevant", "high").await.unwrap();
+        let loaded = sm.load_session(sid).await.unwrap();
         let found = loaded.queries.iter().any(|q|
             q.results.iter().any(|h| h.patent_id == "US1234567" && h.relevance == "high" && h.note == "highly relevant")
         );
         assert!(found, "annotated patent should have updated note and relevance");
     }
 
-    #[test]
-    fn parity_session_export_produces_markdown() {
+    #[tokio::test]
+    async fn parity_session_export_produces_markdown() {
         let tmp = tempfile::tempdir().unwrap();
         let sm = crate::search::session_manager::SessionManager::new(Some(tmp.path().to_path_buf()));
-        let session = sm.create_session("export-test", Some("2020-01-01"), "initial notes").unwrap();
-        sm.add_note(&session.session_id, "research note").unwrap();
+        let session = sm.create_session("export-test", Some("2020-01-01"), "initial notes").await.unwrap();
+        sm.add_note(&session.session_id, "research note").await.unwrap();
 
-        let report_path = sm.export_markdown(&session.session_id, None).unwrap();
+        let report_path = sm.export_markdown(&session.session_id, None).await.unwrap();
         assert!(report_path.exists());
         let content = std::fs::read_to_string(&report_path).unwrap();
         assert!(content.contains("export-test"));
         assert!(content.contains("research note"));
     }
 
-    #[test]
-    fn parity_citation_chains_in_session() {
+    #[tokio::test]
+    async fn parity_citation_chains_in_session() {
         let tmp = tempfile::tempdir().unwrap();
         let sm = crate::search::session_manager::SessionManager::new(Some(tmp.path().to_path_buf()));
-        let session = sm.create_session("citation-test", None, "").unwrap();
+        let session = sm.create_session("citation-test", None, "").await.unwrap();
         let sid = &session.session_id;
 
-        let mut session = sm.load_session(sid).unwrap();
+        let mut session = sm.load_session(sid).await.unwrap();
         session.citation_chains = serde_json::json!({
             "US1234567": {
                 "backward": {"level_1": ["US1111111", "US2222222"]},
                 "forward": {"level_1": ["US3333333"]}
             }
         });
-        sm.save_session(&mut session).unwrap();
+        sm.save_session(&mut session).await.unwrap();
 
-        let loaded = sm.load_session(sid).unwrap();
+        let loaded = sm.load_session(sid).await.unwrap();
         let chains = &loaded.citation_chains;
         assert!(chains["US1234567"]["backward"]["level_1"].is_array());
         assert_eq!(chains["US1234567"]["backward"]["level_1"].as_array().unwrap().len(), 2);
     }
 
-    #[test]
-    fn parity_classifications_explored_in_session() {
+    #[tokio::test]
+    async fn parity_classifications_explored_in_session() {
         let tmp = tempfile::tempdir().unwrap();
         let sm = crate::search::session_manager::SessionManager::new(Some(tmp.path().to_path_buf()));
-        let session = sm.create_session("class-test", None, "").unwrap();
+        let session = sm.create_session("class-test", None, "").await.unwrap();
         let sid = &session.session_id;
 
-        let mut session = sm.load_session(sid).unwrap();
+        let mut session = sm.load_session(sid).await.unwrap();
         session.classifications_explored.push("H02J50".to_string());
         session.classifications_explored.push("H01F38".to_string());
-        sm.save_session(&mut session).unwrap();
+        sm.save_session(&mut session).await.unwrap();
 
-        let loaded = sm.load_session(sid).unwrap();
+        let loaded = sm.load_session(sid).await.unwrap();
         assert_eq!(loaded.classifications_explored, vec!["H02J50", "H01F38"]);
     }
 
-    #[test]
-    fn parity_patent_families_in_session() {
+    #[tokio::test]
+    async fn parity_patent_families_in_session() {
         let tmp = tempfile::tempdir().unwrap();
         let sm = crate::search::session_manager::SessionManager::new(Some(tmp.path().to_path_buf()));
-        let session = sm.create_session("family-test", None, "").unwrap();
+        let session = sm.create_session("family-test", None, "").await.unwrap();
         let sid = &session.session_id;
 
-        let mut session = sm.load_session(sid).unwrap();
+        let mut session = sm.load_session(sid).await.unwrap();
         session.patent_families.insert(
             "US1234567".to_string(),
             vec!["EP1234567".to_string(), "WO2020123456".to_string()],
         );
-        sm.save_session(&mut session).unwrap();
+        sm.save_session(&mut session).await.unwrap();
 
-        let loaded = sm.load_session(sid).unwrap();
+        let loaded = sm.load_session(sid).await.unwrap();
         assert_eq!(loaded.patent_families["US1234567"].len(), 2);
         assert!(loaded.patent_families["US1234567"].contains(&"EP1234567".to_string()));
     }

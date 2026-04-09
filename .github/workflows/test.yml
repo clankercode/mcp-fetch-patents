@@ -29,6 +29,9 @@ jobs:
         env:
           PYTHONPATH: src/python
 
+      - name: Lint Python
+        run: pip install ruff && ruff check src/python/
+
       - name: Run slow + fuzz tests
         run: |
           pytest tests/python/ -q --tb=short
@@ -48,6 +51,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "src/rust -> target"
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path src/rust/Cargo.toml -- --check
 
       - name: Build
         run: cargo build --manifest-path src/rust/Cargo.toml

@@ -12,7 +12,6 @@ import json
 import logging
 import time
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -20,15 +19,6 @@ import httpx
 from patent_mcp.search.session_manager import PatentHit  # canonical definition
 
 log = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Helper
-# ---------------------------------------------------------------------------
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 # ---------------------------------------------------------------------------

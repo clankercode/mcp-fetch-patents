@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from patent_mcp.utils import now_iso
+
 # Per-directory lock registry to serialise index reads+writes within a process
 _index_locks: dict[str, threading.Lock] = {}
 _index_locks_mutex = threading.Lock()
@@ -138,10 +140,6 @@ def _session_from_dict(d: dict[str, Any]) -> Session:
     )
 
 
-def _now_iso() -> str:
-    return datetime.now(tz=timezone.utc).isoformat()
-
-
 def _make_slug(topic: str) -> str:
     """Lower, spaces→hyphens, strip non-alphanumeric-except-hyphens, first 30 chars."""
     slug = topic.lower().replace(" ", "-")
@@ -201,7 +199,7 @@ class SessionManager:
         notes: str = "",
     ) -> Session:
         """Create a new session and persist it to disk."""
-        now = _now_iso()
+        now = now_iso()
         slug = _make_slug(topic)
         ts = datetime.now(tz=timezone.utc).strftime("%Y%m%d-%H%M%S")
         session_id = f"{ts}-{slug}"
@@ -231,7 +229,7 @@ class SessionManager:
 
     def save_session(self, session: Session) -> None:
         """Atomically write session to disk and update the index."""
-        session.modified_at = _now_iso()
+        session.modified_at = now_iso()
         path = self._dir / f"{session.session_id}.json"
         tmp_path = path.with_suffix(".json.tmp")
         content = json.dumps(_session_to_dict(session), indent=2, ensure_ascii=False)
