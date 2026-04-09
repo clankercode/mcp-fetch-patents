@@ -118,17 +118,10 @@ impl SerpApiGooglePatentsBackend {
             .and_then(|v| v.as_str())
             .map(String::from);
 
-        let inventors_raw = item.get("inventor");
-        let inventors: Vec<String> = match inventors_raw {
-            Some(v) if v.is_string() => vec![v.as_str().unwrap().to_string()],
-            Some(v) if v.is_array() => v
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter_map(|i| i.as_str().map(String::from))
-                .collect(),
-            _ => vec![],
-        };
+        let inventors = item
+            .get("inventor")
+            .map(super::string_or_array_to_vec)
+            .unwrap_or_default();
 
         let url = item
             .get("pdf")

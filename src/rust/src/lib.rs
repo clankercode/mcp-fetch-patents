@@ -17,3 +17,7 @@ pub mod server;
 pub fn now_iso() -> String {
     chrono::Utc::now().to_rfc3339()
 }
+
+pub fn elapsed_ms(start: std::time::Instant) -> f64 {
+    start.elapsed().as_secs_f64() * 1000.0
+}

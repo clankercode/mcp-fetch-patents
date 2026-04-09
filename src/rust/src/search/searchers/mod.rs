@@ -37,6 +37,19 @@ fn local_name(raw: &[u8]) -> String {
     }
 }
 
+fn string_or_array_to_vec(v: &serde_json::Value) -> Vec<String> {
+    match v {
+        v if v.is_string() => vec![v.as_str().unwrap().to_string()],
+        v if v.is_array() => v
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|i| i.as_str().map(String::from))
+            .collect(),
+        _ => vec![],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

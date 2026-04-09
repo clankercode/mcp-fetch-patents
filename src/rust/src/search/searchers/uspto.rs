@@ -108,17 +108,10 @@ impl UsptoTextSearchBackend {
             .and_then(|v| v.as_str())
             .map(String::from);
 
-        let inventors_raw = doc.get("inventors");
-        let inventors: Vec<String> = match inventors_raw {
-            Some(v) if v.is_string() => vec![v.as_str().unwrap().to_string()],
-            Some(v) if v.is_array() => v
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter_map(|i| i.as_str().map(String::from))
-                .collect(),
-            _ => vec![],
-        };
+        let inventors = doc
+            .get("inventors")
+            .map(super::string_or_array_to_vec)
+            .unwrap_or_default();
 
         Some(PatentHit {
             title: doc.get("title").and_then(|v| v.as_str()).map(String::from),

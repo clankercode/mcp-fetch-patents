@@ -50,14 +50,14 @@ impl PatentSource for IpAustraliaSource {
             Ok(r) => r,
             Err(e) => {
                 let mut res = fail_result(source, &e.to_string());
-                res.source_attempt.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                res.source_attempt.elapsed_ms = crate::elapsed_ms(start);
                 return res;
             }
         };
 
         if resp.status().as_u16() == 404 {
             let mut res = fail_result(source, "not_found");
-            res.source_attempt.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            res.source_attempt.elapsed_ms = crate::elapsed_ms(start);
             return res;
         }
 
@@ -65,7 +65,7 @@ impl PatentSource for IpAustraliaSource {
             Ok(d) => d,
             Err(e) => {
                 let mut res = fail_result(source, &e.to_string());
-                res.source_attempt.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                res.source_attempt.elapsed_ms = crate::elapsed_ms(start);
                 return res;
             }
         };
@@ -116,7 +116,7 @@ impl PatentSource for IpAustraliaSource {
             source_attempt: crate::cache::SourceAttempt {
                 source: source.into(),
                 success: true,
-                elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+                elapsed_ms: crate::elapsed_ms(start),
                 error: None,
                 metadata: None,
             },

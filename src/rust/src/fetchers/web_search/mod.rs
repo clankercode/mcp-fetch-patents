@@ -304,7 +304,7 @@ impl WebSearchFallbackSource {
             })
             .collect();
 
-        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+        let elapsed = crate::elapsed_ms(start);
 
         FetchResult {
             source_attempt: SourceAttempt {

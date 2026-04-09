@@ -49,7 +49,7 @@ impl PatentSource for BrowserSource {
                     source_attempt: SourceAttempt {
                         source: "Google_Patents".to_string(),
                         success: false,
-                        elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+                        elapsed_ms: crate::elapsed_ms(start),
                         error: Some(error.to_string()),
                         metadata: None,
                     },
@@ -65,7 +65,7 @@ impl PatentSource for BrowserSource {
                 source_attempt: SourceAttempt {
                     source: "Google_Patents".to_string(),
                     success: false,
-                    elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+                    elapsed_ms: crate::elapsed_ms(start),
                     error: Some("not_found".to_string()),
                     metadata: None,
                 },
@@ -82,7 +82,7 @@ impl PatentSource for BrowserSource {
                     source_attempt: SourceAttempt {
                         source: "Google_Patents".to_string(),
                         success: false,
-                        elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+                        elapsed_ms: crate::elapsed_ms(start),
                         error: Some(error.to_string()),
                         metadata: None,
                     },
@@ -100,7 +100,7 @@ impl PatentSource for BrowserSource {
                     source_attempt: SourceAttempt {
                         source: "Google_Patents".to_string(),
                         success: false,
-                        elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+                        elapsed_ms: crate::elapsed_ms(start),
                         error: Some("Google Patents returned no usable metadata".to_string()),
                         metadata: None,
                     },
@@ -115,7 +115,7 @@ impl PatentSource for BrowserSource {
             source_attempt: SourceAttempt {
                 source: "Google_Patents".to_string(),
                 success: true,
-                elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+                elapsed_ms: crate::elapsed_ms(start),
                 error: None,
                 metadata: None,
             },

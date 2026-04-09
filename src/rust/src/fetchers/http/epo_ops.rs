@@ -269,20 +269,20 @@ impl PatentSource for EpoOpsSource {
             Ok(r) => r,
             Err(e) => {
                 let mut res = fail_result(source, &e.to_string());
-                res.source_attempt.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                res.source_attempt.elapsed_ms = crate::elapsed_ms(start);
                 return res;
             }
         };
 
         if resp.status().as_u16() == 404 {
             let mut res = fail_result(source, "not_found");
-            res.source_attempt.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            res.source_attempt.elapsed_ms = crate::elapsed_ms(start);
             return res;
         }
 
         if resp.status().as_u16() == 401 {
             let mut res = fail_result(source, "EPO OPS auth failed");
-            res.source_attempt.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            res.source_attempt.elapsed_ms = crate::elapsed_ms(start);
             return res;
         }
 
@@ -290,7 +290,7 @@ impl PatentSource for EpoOpsSource {
             Ok(t) => t,
             Err(e) => {
                 let mut res = fail_result(source, &e.to_string());
-                res.source_attempt.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                res.source_attempt.elapsed_ms = crate::elapsed_ms(start);
                 return res;
             }
         };
@@ -299,7 +299,7 @@ impl PatentSource for EpoOpsSource {
             Some(m) => m,
             None => {
                 let mut res = fail_result(source, "Failed to parse EPO OPS biblio XML");
-                res.source_attempt.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                res.source_attempt.elapsed_ms = crate::elapsed_ms(start);
                 return res;
             }
         };
@@ -335,7 +335,7 @@ impl PatentSource for EpoOpsSource {
 
         if pdf_path.is_none() && !metadata_has_useful_fields(&meta) {
             let mut res = fail_result(source, "EPO OPS returned no usable metadata");
-            res.source_attempt.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+            res.source_attempt.elapsed_ms = crate::elapsed_ms(start);
             return res;
         }
 
@@ -343,7 +343,7 @@ impl PatentSource for EpoOpsSource {
             source_attempt: crate::cache::SourceAttempt {
                 source: source.into(),
                 success: true,
-                elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+                elapsed_ms: crate::elapsed_ms(start),
                 error: None,
                 metadata: None,
             },

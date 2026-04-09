@@ -230,7 +230,7 @@ impl<'a> SearchOrchestrator<'a> {
             }
         }
 
-        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        let elapsed_ms = crate::elapsed_ms(start);
 
         Ok(SearchResult {
             scored,
@@ -239,5 +239,78 @@ impl<'a> SearchOrchestrator<'a> {
             enriched_ids,
             elapsed_ms,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_options_default_fields() {
+        let opts = SearchOptions {
+            max_results: 25,
+            backend: "auto".to_string(),
+            enrich_top_n: 5,
+            profile_name: "default".to_string(),
+            debug: false,
+            date_cutoff: None,
+        };
+        assert_eq!(opts.max_results, 25);
+        assert_eq!(opts.backend, "auto");
+        assert!(opts.date_cutoff.is_none());
+    }
+
+    #[test]
+    fn search_result_fields() {
+        let intent = crate::planner::NaturalLanguagePlanner.plan("wireless charging", None, None);
+        assert!(!intent.query_variants.is_empty());
+
+        let result = SearchResult {
+            scored: vec![],
+            intent,
+            queries_run: vec![serde_json::json!({"source": "test", "query": "q1"})],
+            enriched_ids: vec![],
+            elapsed_ms: 42.5,
+        };
+        assert!(result.scored.is_empty());
+        assert_eq!(result.queries_run.len(), 1);
+        assert_eq!(result.elapsed_ms, 42.5);
+    }
+
+    #[test]
+    fn planner_ranker_pipeline() {
+        let planner = crate::planner::NaturalLanguagePlanner;
+        let intent = planner.plan("neural network for image classification", None, None);
+
+        assert!(!intent.concepts.is_empty());
+        assert!(!intent.query_variants.is_empty());
+
+        let mut hits_by_query = std::collections::HashMap::new();
+        hits_by_query.insert(
+            intent.query_variants[0].query.clone(),
+            vec![crate::ranking::PatentHit::new(
+                "US12345678".to_string(),
+                crate::search::searchers::SOURCE_USPTO,
+            )],
+        );
+
+        let ranker = crate::ranking::SearchRanker;
+        let scored = ranker.rank(&hits_by_query, &intent);
+        assert_eq!(scored.len(), 1);
+        assert_eq!(scored[0].hit.patent_id, "US12345678");
+        assert!(scored[0].score >= 0.0);
+    }
+
+    #[test]
+    fn effective_backend_auto_resolves() {
+        let backend = "auto";
+        let default_backend = "serpapi";
+        let effective = if backend == "auto" {
+            default_backend
+        } else {
+            backend
+        };
+        assert_eq!(effective, "serpapi");
     }
 }

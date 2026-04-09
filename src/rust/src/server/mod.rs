@@ -527,7 +527,7 @@ async fn build_fetch_patents_payload(
         }));
     }
 
-    let total_duration_ms = start_total.elapsed().as_secs_f64() * 1000.0;
+    let total_duration_ms = crate::elapsed_ms(start_total);
     let total = results.len() as u32;
     serde_json::json!({
         "results": results,

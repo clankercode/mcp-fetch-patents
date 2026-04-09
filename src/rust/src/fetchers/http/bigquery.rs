@@ -33,7 +33,7 @@ impl PatentSource for BigQuerySource {
             Some(p) if !p.is_empty() => p.clone(),
             _ => {
                 let mut res = fail_result(source, "BigQuery not configured: no project");
-                res.source_attempt.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                res.source_attempt.elapsed_ms = crate::elapsed_ms(start);
                 return res;
             }
         };
@@ -100,7 +100,7 @@ except Exception as e:
                     Ok(data) => {
                         if let Some(err) = data.get("error").and_then(|v| v.as_str()) {
                             let mut res = fail_result(source, err);
-                            res.source_attempt.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                            res.source_attempt.elapsed_ms = crate::elapsed_ms(start);
                             return res;
                         }
 
@@ -195,7 +195,7 @@ except Exception as e:
                             source_attempt: crate::cache::SourceAttempt {
                                 source: source.into(),
                                 success: true,
-                                elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+                                elapsed_ms: crate::elapsed_ms(start),
                                 error: None,
                                 metadata: None,
                             },
@@ -207,19 +207,19 @@ except Exception as e:
                     Err(e) => {
                         let mut res =
                             fail_result(source, &format!("Failed to parse BigQuery output: {}", e));
-                        res.source_attempt.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                        res.source_attempt.elapsed_ms = crate::elapsed_ms(start);
                         res
                     }
                 }
             }
             Ok(Err(e)) => {
                 let mut res = fail_result(source, &format!("Python subprocess error: {}", e));
-                res.source_attempt.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                res.source_attempt.elapsed_ms = crate::elapsed_ms(start);
                 res
             }
             Err(e) => {
                 let mut res = fail_result(source, &format!("Spawn error: {}", e));
-                res.source_attempt.elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+                res.source_attempt.elapsed_ms = crate::elapsed_ms(start);
                 res
             }
         }
