@@ -1931,4 +1931,146 @@ mod tests {
         let err = resp.error.unwrap();
         assert!(err.message.contains("not found"));
     }
+
+    #[tokio::test]
+    async fn e2e_citation_chain_no_creds() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(900.into());
+
+        let params = tool_params("patent_citation_chain", serde_json::json!({
+            "patent_id": "US10000000", "direction": "backward", "depth": 1
+        }));
+        let resp = execute_tool_call(id, params, &config, &cache, &orchestrator, &journal, &backends).await;
+        assert!(resp.result.is_some());
+        let payload = extract_payload(resp);
+        assert_eq!(payload["seed"], "US10000000");
+        assert_eq!(payload["direction"], "backward");
+        assert_eq!(payload["depth"], 1);
+        assert!(payload["citations"].is_object());
+    }
+
+    #[tokio::test]
+    async fn e2e_citation_chain_both_directions() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(910.into());
+
+        let params = tool_params("patent_citation_chain", serde_json::json!({
+            "patent_id": "US10000000", "direction": "both", "depth": 2
+        }));
+        let resp = execute_tool_call(id, params, &config, &cache, &orchestrator, &journal, &backends).await;
+        assert!(resp.result.is_some());
+        let payload = extract_payload(resp);
+        assert_eq!(payload["direction"], "both");
+        assert_eq!(payload["depth"], 2);
+        let citations = &payload["citations"];
+        assert!(citations["backward"].is_object());
+        assert!(citations["forward"].is_object());
+        assert!(citations["backward"]["level_1"].is_array());
+        assert!(citations["forward"]["level_1"].is_array());
+    }
+
+    #[tokio::test]
+    async fn e2e_citation_chain_with_session() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(920.into());
+
+        let create_params = tool_params("patent_session_create", serde_json::json!({"topic": "citation-e2e"}));
+        let resp = execute_tool_call(id.clone(), create_params, &config, &cache, &orchestrator, &journal, &backends).await;
+        let sid = extract_payload(resp)["session_id"].as_str().unwrap().to_string();
+
+        let params = tool_params("patent_citation_chain", serde_json::json!({
+            "patent_id": "US10000000", "direction": "backward", "depth": 1, "session_id": sid
+        }));
+        let resp = execute_tool_call(id, params, &config, &cache, &orchestrator, &journal, &backends).await;
+        assert!(resp.result.is_some());
+
+        let load_params = tool_params("patent_session_load", serde_json::json!({"session_id": &sid}));
+        let resp = execute_tool_call(Value::Number(921.into()), load_params, &config, &cache, &orchestrator, &journal, &backends).await;
+        let loaded = extract_payload(resp);
+        let chains = &loaded["citation_chains"];
+        assert!(chains["US10000000"].is_object());
+        assert!(chains["US10000000"]["backward"]["level_1"].is_array());
+    }
+
+    #[tokio::test]
+    async fn e2e_classification_search_no_creds() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(1000.into());
+
+        let params = tool_params("patent_classification_search", serde_json::json!({
+            "code": "H02J50", "include_subclasses": true, "date_from": "2010-01-01", "date_to": "2020-01-01"
+        }));
+        let resp = execute_tool_call(id, params, &config, &cache, &orchestrator, &journal, &backends).await;
+        assert!(resp.result.is_some());
+        let payload = extract_payload(resp);
+        assert_eq!(payload["code"], "H02J50");
+        assert_eq!(payload["include_subclasses"], true);
+        assert_eq!(payload["date_from"], "2010-01-01");
+        assert_eq!(payload["date_to"], "2020-01-01");
+        assert!(payload["total_found"].is_number());
+        assert!(payload["results"].is_array());
+    }
+
+    #[tokio::test]
+    async fn e2e_family_search_no_creds() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(1100.into());
+
+        let params = tool_params("patent_family_search", serde_json::json!({
+            "patent_id": "US10000000"
+        }));
+        let resp = execute_tool_call(id, params, &config, &cache, &orchestrator, &journal, &backends).await;
+        assert!(resp.result.is_some());
+        let payload = extract_payload(resp);
+        assert_eq!(payload["patent_id"], "US10000000");
+        assert!(payload["family_size"].is_number());
+        assert!(payload["members"].is_array());
+    }
+
+    #[tokio::test]
+    async fn e2e_search_natural_with_session_id() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(1200.into());
+
+        let create_params = tool_params("patent_session_create", serde_json::json!({"topic": "natural-session-e2e"}));
+        let resp = execute_tool_call(id.clone(), create_params, &config, &cache, &orchestrator, &journal, &backends).await;
+        let sid = extract_payload(resp)["session_id"].as_str().unwrap().to_string();
+
+        let params = tool_params("patent_search_natural", serde_json::json!({
+            "description": "wireless charging", "session_id": &sid
+        }));
+        let resp = execute_tool_call(id, params, &config, &cache, &orchestrator, &journal, &backends).await;
+        assert!(resp.result.is_some());
+        let payload = extract_payload(resp);
+        assert!(payload["planner"]["concepts"].is_array());
+        assert!(payload["results"].is_array());
+
+        let load_params = tool_params("patent_session_load", serde_json::json!({"session_id": &sid}));
+        let resp = execute_tool_call(Value::Number(1201.into()), load_params, &config, &cache, &orchestrator, &journal, &backends).await;
+        let loaded = extract_payload(resp);
+        assert_eq!(loaded["topic"], "natural-session-e2e");
+    }
+
+    #[tokio::test]
+    async fn e2e_search_structured_with_session_id() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(1300.into());
+
+        let create_params = tool_params("patent_session_create", serde_json::json!({"topic": "structured-session-e2e"}));
+        let resp = execute_tool_call(id.clone(), create_params, &config, &cache, &orchestrator, &journal, &backends).await;
+        let sid = extract_payload(resp)["session_id"].as_str().unwrap().to_string();
+
+        let params = tool_params("patent_search_structured", serde_json::json!({
+            "query": "TTL+(wireless)", "sources": ["USPTO"], "session_id": &sid
+        }));
+        let resp = execute_tool_call(id, params, &config, &cache, &orchestrator, &journal, &backends).await;
+        assert!(resp.result.is_some());
+        let payload = extract_payload(resp);
+        assert!(payload["results"].is_array());
+
+        let load_params = tool_params("patent_session_load", serde_json::json!({"session_id": &sid}));
+        let resp = execute_tool_call(Value::Number(1301.into()), load_params, &config, &cache, &orchestrator, &journal, &backends).await;
+        let loaded = extract_payload(resp);
+        assert_eq!(loaded["topic"], "structured-session-e2e");
+    }
 }

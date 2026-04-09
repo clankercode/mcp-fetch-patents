@@ -507,4 +507,42 @@ mod tests {
         let id = &caps[0][1];
         assert!(id.len() >= 7);
     }
+
+    #[test]
+    fn test_constructor_creates_instance() {
+        let search = GooglePatentsBrowserSearch::new(
+            None,
+            "test-profile",
+            true,
+            30000,
+            2,
+            None,
+        );
+        assert_eq!(search.profile_name, "test-profile");
+        assert!(search.headless);
+        assert_eq!(search.timeout_ms, 30000);
+        assert_eq!(search.max_pages, 2);
+        assert!(search.debug_html_dir.is_none());
+    }
+
+    #[test]
+    fn test_browser_user_agent_constant() {
+        assert!(BROWSER_USER_AGENT.contains("Chrome/"));
+        assert!(BROWSER_USER_AGENT.contains("Linux x86_64"));
+    }
+
+    #[test]
+    fn test_patent_body_re_via_once_lock() {
+        let re = patent_body_re();
+        assert!(re.is_match("US12345678"));
+        assert!(re.is_match("EP1234567A1"));
+        assert!(!re.is_match("short"));
+    }
+
+    #[test]
+    fn test_patent_href_re_via_once_lock() {
+        let re = patent_href_re();
+        let caps = re.captures("/patent/US9999999B2/en").unwrap();
+        assert_eq!(&caps[1], "US9999999B2");
+    }
 }

@@ -1745,4 +1745,92 @@ mod tests {
         assert_eq!(members[0]["patent_id"].as_str().unwrap(), "EP1111111A1");
         assert_eq!(members[1]["patent_id"].as_str().unwrap(), "US2222222B1");
     }
+
+    #[test]
+    fn epo_ops_map_doc_array_format_inventors() {
+        let doc = serde_json::json!({
+            "@doc-number": "12345678",
+            "@country": "US",
+            "@kind": "B2",
+            "bibliographic-data": {
+                "invention-title": [{"@lang": "en", "$": "Array Inventors Test"}],
+                "publication-reference": {
+                    "document-id": {
+                        "date": {"$": "20210615"}
+                    }
+                },
+                "parties": {
+                    "inventors": {
+                        "inventor": [
+                            {"inventor-name": {"name": {"$": "Alice Smith"}}},
+                            {"inventor-name": {"name": {"$": "Bob Jones"}}}
+                        ]
+                    },
+                    "applicants": {
+                        "applicant": [
+                            {"applicant-name": {"name": {"$": "Acme Corp"}}}
+                        ]
+                    }
+                }
+            }
+        });
+        let hit = EpoOpsSearchBackend::map_ops_json_doc(&doc).unwrap();
+        assert_eq!(hit.patent_id, "US12345678B2");
+        assert_eq!(hit.inventors, vec!["Alice Smith", "Bob Jones"]);
+        assert_eq!(hit.assignee.as_deref(), Some("Acme Corp"));
+    }
+
+    #[test]
+    fn epo_ops_map_doc_title_text_fallback() {
+        let doc = serde_json::json!({
+            "@doc-number": "9999999",
+            "@country": "EP",
+            "@kind": "A1",
+            "bibliographic-data": {
+                "invention-title": {"@lang": "de", "#text": "Deutscher Titel"},
+                "parties": {}
+            }
+        });
+        let hit = EpoOpsSearchBackend::map_ops_json_doc(&doc).unwrap();
+        assert_eq!(hit.title.as_deref(), Some("Deutscher Titel"));
+    }
+
+    #[test]
+    fn epo_ops_map_doc_date_text_fallback() {
+        let doc = serde_json::json!({
+            "@doc-number": "5555555",
+            "@country": "US",
+            "@kind": "A",
+            "bibliographic-data": {
+                "invention-title": [{"@lang": "en", "$": "Date Text Test"}],
+                "publication-reference": {
+                    "document-id": {
+                        "date": {"#text": "2019-06-15"}
+                    }
+                },
+                "parties": {}
+            }
+        });
+        let hit = EpoOpsSearchBackend::map_ops_json_doc(&doc).unwrap();
+        assert_eq!(hit.date.as_deref(), Some("2019-06-15"));
+    }
+
+    #[test]
+    fn serpapi_map_result_priority_date_fallback() {
+        let item = serde_json::json!({
+            "patent_id": "US9876543",
+            "title": "Priority Date Test",
+            "priority_date": "2018-03-20",
+            "inventor": ["Carol"],
+        });
+        let hit = SerpApiGooglePatentsBackend::map_result(&item).unwrap();
+        assert_eq!(hit.date.as_deref(), Some("2018-03-20"));
+    }
+
+    #[test]
+    fn test_local_name_strips_namespace() {
+        assert_eq!(local_name(b"ex:country"), "country");
+        assert_eq!(local_name(b"country"), "country");
+        assert_eq!(local_name(b"ops:world-patent-data"), "world-patent-data");
+    }
 }

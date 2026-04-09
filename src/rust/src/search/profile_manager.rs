@@ -305,4 +305,52 @@ mod tests {
         let profiles = mgr.list_profiles().unwrap();
         assert_eq!(profiles, vec!["alpha", "beta", "gamma"]);
     }
+
+    #[test]
+    fn force_release_lock() {
+        let (_tmp, mgr) = make_mgr();
+        mgr.acquire_lock("force-test", "login").unwrap();
+        let (locked, _) = mgr.is_locked("force-test");
+        assert!(locked);
+
+        mgr.force_release_lock("force-test").unwrap();
+        let (locked_after, _) = mgr.is_locked("force-test");
+        assert!(!locked_after);
+    }
+
+    #[test]
+    fn release_lock_skips_mismatched_pid() {
+        let (_tmp, mgr) = make_mgr();
+        mgr.acquire_lock("pid-test", "login").unwrap();
+
+        let lock_path = mgr.lock_path("pid-test");
+        let mut lock_data: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&lock_path).unwrap()).unwrap();
+        lock_data["pid"] = serde_json::json!(999999);
+        std::fs::write(&lock_path, lock_data.to_string()).unwrap();
+
+        mgr.release_lock("pid-test").unwrap();
+        assert!(
+            lock_path.exists(),
+            "should still exist since PID doesn't match"
+        );
+    }
+
+    #[test]
+    fn is_locked_corrupt_json_removes_file() {
+        let (_tmp, mgr) = make_mgr();
+        mgr.get_profile_dir("corrupt-test").unwrap();
+        let lock_path = mgr.lock_path("corrupt-test");
+        std::fs::write(&lock_path, "not valid json{{{").unwrap();
+
+        let (locked, _) = mgr.is_locked("corrupt-test");
+        assert!(!locked);
+        assert!(!lock_path.exists(), "corrupt lock file should be removed");
+    }
+
+    #[test]
+    fn release_lock_no_file_is_ok() {
+        let (_tmp, mgr) = make_mgr();
+        mgr.release_lock("nonexistent").unwrap();
+    }
 }
