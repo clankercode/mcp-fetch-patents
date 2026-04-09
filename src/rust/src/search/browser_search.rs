@@ -14,7 +14,7 @@ use crate::search::profile_manager::ProfileManager;
 const SOURCE_BROWSER: &str = "Google_Patents_Browser";
 
 pub const BROWSER_USER_AGENT: &str =
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36";
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
 
 static PATENT_HREF_RE: OnceLock<Regex> = OnceLock::new();
 static PATENT_BODY_RE: OnceLock<Regex> = OnceLock::new();

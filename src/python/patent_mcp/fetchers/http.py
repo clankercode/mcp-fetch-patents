@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36 patent-mcp-server/0.1"
+    "(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 patent-mcp-server/0.1"
 )
 
 
