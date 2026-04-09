@@ -147,7 +147,7 @@ fn tools_list() -> Value {
                         "session_id": {"type": "string", "description": "Optional session ID to save results."},
                         "max_results": {"type": "integer", "default": 25, "description": "Maximum results after ranking."},
                         "backend": {"type": "string", "default": "auto", "description": "Search backend: \"browser\", \"serpapi\", or \"auto\"."},
-                        "enrich_top_n": {"type": "integer", "description": "Reserved for future use: enrich top N results with full metadata. Currently returns empty enriched_ids."},
+                        "enrich_top_n": {"type": "integer", "description": "Enrich top N results with full metadata via fetch pipeline. Default from config."},
                         "debug": {"type": "boolean", "default": false}
                     },
                     "required": ["description"]
@@ -567,6 +567,7 @@ async fn execute_tool_call(
             let backend = get_str_param(&params, "backend").unwrap_or_else(|| "auto".to_string());
             let _enrich_top_n = get_int_param(&params, "enrich_top_n")
                 .unwrap_or(config.search_enrich_top_n as u64) as usize;
+            let enrich_top_n = _enrich_top_n;
 
             let start = std::time::Instant::now();
 
@@ -619,6 +620,39 @@ async fn execute_tool_call(
             let mut scored = ranker.rank(&hits_by_query, &intent);
             scored.truncate(max_results);
 
+            let mut enriched_ids: Vec<String> = Vec::new();
+            if enrich_top_n > 0 && !scored.is_empty() {
+                let to_enrich: Vec<crate::id_canon::CanonicalPatentId> = scored.iter()
+                    .take(enrich_top_n)
+                    .filter_map(|s| {
+                        let cid = crate::id_canon::canonicalize(&s.hit.patent_id);
+                        if cid.canonical.is_empty() { None } else { Some(cid) }
+                    })
+                    .collect();
+                if !to_enrich.is_empty() {
+                    let output_base = &config.cache_local_dir;
+                    let results = orchestrator.fetch_batch(&to_enrich, output_base).await;
+                    let result_map: std::collections::HashMap<String, &crate::fetchers::OrchestratorResult> = results
+                        .iter()
+                        .filter(|r| r.success && r.metadata.is_some())
+                        .map(|r| (r.canonical_id.clone(), r))
+                        .collect();
+                    for s in scored.iter_mut().take(enrich_top_n) {
+                        let cid = crate::id_canon::canonicalize(&s.hit.patent_id);
+                        if let Some(result) = result_map.get(&cid.canonical) {
+                            if let Some(ref meta) = result.metadata {
+                                if s.hit.title.is_none() { s.hit.title = meta.title.clone(); }
+                                if s.hit.abstract_text.is_none() { s.hit.abstract_text = meta.abstract_text.clone(); }
+                                if s.hit.assignee.is_none() { s.hit.assignee = meta.assignee.clone(); }
+                                if s.hit.inventors.is_empty() && !meta.inventors.is_empty() { s.hit.inventors = meta.inventors.clone(); }
+                                if s.hit.date.is_none() { s.hit.date = meta.publication_date.clone(); }
+                                enriched_ids.push(cid.canonical);
+                            }
+                        }
+                    }
+                }
+            }
+
             let all_hits: Vec<&crate::ranking::PatentHit> = scored.iter().map(|s| &s.hit).collect();
 
             if let Some(ref sid) = session_id {
@@ -661,7 +695,7 @@ async fn execute_tool_call(
                 "synonyms_expanded": intent.synonyms,
                 "queries_run": queries_run,
                 "total_found": scored.len(),
-                "enriched_ids": Vec::<String>::new(),
+                "enriched_ids": enriched_ids,
                 "results": scored.iter().map(|s| serde_json::json!({
                     "patent_id": s.hit.patent_id,
                     "title": s.hit.title,
