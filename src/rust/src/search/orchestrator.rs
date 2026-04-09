@@ -75,12 +75,12 @@ impl<'a> SearchOrchestrator<'a> {
                 browser_cfg.debug_html_dir.clone()
             };
             let browser = crate::search::browser_search::GooglePatentsBrowserSearch::new(
-                browser_cfg.profiles_dir.clone(),
+                self.backends.browser_pool.clone(),
                 &opts.profile_name,
-                browser_cfg.headless,
                 browser_cfg.timeout_ms,
                 browser_cfg.max_pages,
                 debug_dir,
+                browser_cfg.profiles_dir.clone(),
             );
             for variant in &intent.query_variants {
                 if hits_by_query.contains_key(&variant.query) {

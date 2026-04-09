@@ -2,19 +2,19 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use anyhow::Result;
-use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::Page;
-use futures::StreamExt;
 use regex::Regex;
 use tracing::warn;
 
 use crate::ranking::PatentHit;
+use crate::search::browser_pool::BrowserPool;
 use crate::search::profile_manager::ProfileManager;
 
 const SOURCE_BROWSER: &str = "Google_Patents_Browser";
 
 pub const BROWSER_USER_AGENT: &str =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
+const STARTUP_BROWSER_PROFILE: &str = "__startup__";
 
 static PATENT_HREF_RE: OnceLock<Regex> = OnceLock::new();
 static PATENT_BODY_RE: OnceLock<Regex> = OnceLock::new();
@@ -28,59 +28,29 @@ fn patent_body_re() -> &'static Regex {
 }
 
 pub struct GooglePatentsBrowserSearch {
+    pool: BrowserPool,
     profile_manager: ProfileManager,
     profile_name: String,
-    headless: bool,
     timeout_ms: u32,
     max_pages: u32,
     debug_html_dir: Option<PathBuf>,
 }
 
-pub fn spawn_startup_browser(profiles_dir: Option<PathBuf>, profile_name: String, headless: bool) {
+pub fn spawn_startup_browser(profiles_dir: Option<PathBuf>, headless: bool) {
     tokio::spawn(async move {
-        if let Err(e) = startup_browser_preflight(profiles_dir, &profile_name, headless).await {
-            warn!("Startup browser preflight failed: {}", e);
+        if let Err(e) = startup_browser_task(profiles_dir, headless).await {
+            warn!("Startup browser failed: {}", e);
         }
     });
 }
 
-async fn startup_browser_preflight(
-    profiles_dir: Option<PathBuf>,
-    profile_name: &str,
-    headless: bool,
-) -> Result<()> {
-    let profile_manager = ProfileManager::new(profiles_dir);
-    profile_manager.acquire_lock(profile_name, "startup-preflight")?;
-    let _lock_guard = LockGuard {
-        pm: &profile_manager,
-        name: profile_name,
-    };
-
-    let mut config_builder = BrowserConfig::builder()
-        .no_sandbox()
-        .arg("--disable-gpu")
-        .window_size(1280, 900)
-        .arg(format!("--user-agent={}", BROWSER_USER_AGENT));
-
-    if !headless {
-        config_builder = config_builder.with_head();
-    }
-
-    let profile_dir = profile_manager.get_profile_dir(profile_name)?;
-    config_builder = config_builder.user_data_dir(profile_dir);
-
-    let config = config_builder.build()?;
-    let (browser, mut handler) = Browser::launch(config).await?;
-    let handler_task = tokio::spawn(async move { while let Some(_h) = handler.next().await {} });
-    let page = browser.new_page("about:blank").await?;
-
+async fn startup_browser_task(profiles_dir: Option<PathBuf>, headless: bool) -> Result<()> {
+    let pool = BrowserPool::new(profiles_dir, STARTUP_BROWSER_PROFILE.to_string(), headless);
+    let page = pool.get_page().await?;
     drop(page);
-    drop(browser);
-    let _ = handler_task.await;
-    tracing::info!(
-        "Startup browser preflight completed for profile {}",
-        profile_name
-    );
+    tracing::info!("Startup browser ready");
+    std::future::pending::<()>().await;
+    #[allow(unreachable_code)]
     Ok(())
 }
 
@@ -99,17 +69,17 @@ impl<'a> Drop for LockGuard<'a> {
 
 impl GooglePatentsBrowserSearch {
     pub fn new(
-        profiles_dir: Option<PathBuf>,
+        pool: BrowserPool,
         profile_name: &str,
-        headless: bool,
         timeout_ms: u32,
         max_pages: u32,
         debug_html_dir: Option<PathBuf>,
+        profiles_dir: Option<PathBuf>,
     ) -> Self {
         Self {
             profile_manager: ProfileManager::new(profiles_dir),
             profile_name: profile_name.to_string(),
-            headless,
+            pool,
             timeout_ms,
             max_pages,
             debug_html_dir,
@@ -148,44 +118,10 @@ impl GooglePatentsBrowserSearch {
         date_after: Option<&str>,
         max_results: usize,
     ) -> Result<Vec<PatentHit>> {
-        let mut config_builder = BrowserConfig::builder()
-            .no_sandbox()
-            .arg("--disable-gpu")
-            .window_size(1280, 900)
-            .arg(format!("--user-agent={}", BROWSER_USER_AGENT));
-
-        if !self.headless {
-            config_builder = config_builder.with_head();
-        }
-
-        if let Ok(profile_dir) = self.profile_manager.get_profile_dir(&self.profile_name) {
-            config_builder = config_builder.user_data_dir(profile_dir);
-        }
-
-        let config = match config_builder.build() {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("Failed to build browser config: {}", e);
-                return Ok(vec![]);
-            }
-        };
-
-        let (browser, mut handler) = match Browser::launch(config).await {
-            Ok(b) => b,
-            Err(e) => {
-                warn!("Failed to launch browser: {}", e);
-                return Ok(vec![]);
-            }
-        };
-
-        let handler_task =
-            tokio::spawn(async move { while let Some(_h) = handler.next().await {} });
-
-        let page = match browser.new_page("about:blank").await {
+        let page = match self.pool.get_page().await {
             Ok(p) => p,
             Err(e) => {
-                warn!("Failed to create page: {}", e);
-                let _ = handler_task.await;
+                warn!("Failed to get browser page: {}", e);
                 return Ok(vec![]);
             }
         };
@@ -225,11 +161,7 @@ impl GooglePatentsBrowserSearch {
         }
 
         all_hits.truncate(max_results);
-
         drop(page);
-        drop(browser);
-        let _ = handler_task.await;
-
         Ok(all_hits)
     }
 }
@@ -576,9 +508,9 @@ mod tests {
 
     #[test]
     fn test_constructor_creates_instance() {
-        let search = GooglePatentsBrowserSearch::new(None, "test-profile", true, 30000, 2, None);
+        let pool = BrowserPool::new(None, "test-profile".to_string(), true);
+        let search = GooglePatentsBrowserSearch::new(pool, "test-profile", 30000, 2, None, None);
         assert_eq!(search.profile_name, "test-profile");
-        assert!(search.headless);
         assert_eq!(search.timeout_ms, 30000);
         assert_eq!(search.max_pages, 2);
         assert!(search.debug_html_dir.is_none());

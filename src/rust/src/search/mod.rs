@@ -2,6 +2,7 @@
 //!
 //! Mirrors the Python `patent_mcp.search` package.
 
+pub mod browser_pool;
 pub mod browser_search;
 pub mod orchestrator;
 pub mod profile_manager;
@@ -23,6 +24,7 @@ pub struct SearchBackends {
     pub epo: searchers::EpoOpsSearchBackend,
     pub session_manager: session_manager::SessionManager,
     pub browser_config: BrowserBackendConfig,
+    pub browser_pool: browser_pool::BrowserPool,
 }
 
 impl SearchBackends {
@@ -69,6 +71,11 @@ impl SearchBackends {
                 max_pages: config.search_browser_max_pages as u32,
                 debug_html_dir: config.search_browser_debug_html_dir.clone(),
             },
+            browser_pool: browser_pool::BrowserPool::new(
+                config.search_browser_profiles_dir.clone(),
+                config.search_browser_default_profile.clone(),
+                config.search_browser_headless,
+            ),
         }
     }
 }

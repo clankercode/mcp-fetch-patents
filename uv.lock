@@ -1690,7 +1690,9 @@ dependencies = [
     { name = "pdfplumber" },
     { name = "pymupdf" },
     { name = "python-dotenv" },
+    { name = "starlette" },
     { name = "tenacity" },
+    { name = "uvicorn" },
 ]
 
 [package.optional-dependencies]
@@ -1710,8 +1712,6 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "reportlab" },
     { name = "respx" },
-    { name = "starlette" },
-    { name = "uvicorn" },
 ]
 marker = [
     { name = "marker-pdf" },
@@ -1743,10 +1743,9 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "reportlab", marker = "extra == 'dev'", specifier = ">=4.0" },
     { name = "respx", marker = "extra == 'dev'", specifier = ">=0.21" },
-    { name = "starlette", marker = "extra == 'dev'", specifier = ">=0.37" },
+    { name = "starlette", specifier = ">=0.37" },
     { name = "tenacity", specifier = ">=8.2" },
-    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
-    { name = "uvicorn", marker = "extra == 'dev'", specifier = ">=0.29" },
+    { name = "uvicorn", specifier = ">=0.29" },
 ]
 provides-extras = ["pymupdf4llm", "browser", "marker", "bigquery", "dev"]
 

@@ -3,13 +3,7 @@
 //! Implements JSON-RPC 2.0 over stdin/stdout (MCP transport).
 
 use anyhow::{anyhow, Result};
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::post,
-    Json, Router,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -639,7 +633,6 @@ fn build_server_state(config: PatentConfig) -> Result<ServerState> {
     let backends = SearchBackends::new(&config, Some(orchestrator.session_cache()));
     crate::search::browser_search::spawn_startup_browser(
         config.search_browser_profiles_dir.clone(),
-        config.search_browser_default_profile.clone(),
         config.search_browser_headless,
     );
 
