@@ -495,4 +495,53 @@ mod tests {
         assert_eq!(scored[0].hit.patent_id, "US-A");
         assert!(scored[0].score > scored[1].score);
     }
+
+    #[test]
+    fn patent_hit_serde_roundtrip() {
+        let hit = PatentHit {
+            patent_id: "US1234567".to_string(),
+            title: Some("Test Patent".to_string()),
+            date: Some("2024-01-15".to_string()),
+            assignee: Some("Test Corp".to_string()),
+            inventors: vec!["Alice".to_string(), "Bob".to_string()],
+            abstract_text: Some("An abstract".to_string()),
+            source: "USPTO".to_string(),
+            relevance: "high".to_string(),
+            note: "important".to_string(),
+            prior_art: Some(true),
+            url: Some("https://example.com".to_string()),
+        };
+        let json = serde_json::to_value(&hit).unwrap();
+        let back: PatentHit = serde_json::from_value(json).unwrap();
+        assert_eq!(back.patent_id, hit.patent_id);
+        assert_eq!(back.title, hit.title);
+        assert_eq!(back.date, hit.date);
+        assert_eq!(back.assignee, hit.assignee);
+        assert_eq!(back.inventors, hit.inventors);
+        assert_eq!(back.abstract_text, hit.abstract_text);
+        assert_eq!(back.source, hit.source);
+        assert_eq!(back.relevance, hit.relevance);
+        assert_eq!(back.note, hit.note);
+        assert_eq!(back.prior_art, hit.prior_art);
+        assert_eq!(back.url, hit.url);
+    }
+
+    #[test]
+    fn patent_hit_serde_defaults() {
+        let json = serde_json::json!({
+            "patent_id": "US0000000"
+        });
+        let hit: PatentHit = serde_json::from_value(json).unwrap();
+        assert_eq!(hit.patent_id, "US0000000");
+        assert!(hit.title.is_none());
+        assert!(hit.date.is_none());
+        assert!(hit.assignee.is_none());
+        assert!(hit.inventors.is_empty());
+        assert!(hit.abstract_text.is_none());
+        assert_eq!(hit.source, "");
+        assert_eq!(hit.relevance, "unknown");
+        assert_eq!(hit.note, "");
+        assert!(hit.prior_art.is_none());
+        assert!(hit.url.is_none());
+    }
 }

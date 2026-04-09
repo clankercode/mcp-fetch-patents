@@ -670,4 +670,81 @@ mod tests {
             .unwrap();
         // Should not panic or return error
     }
+
+    #[test]
+    fn patent_metadata_serde_roundtrip() {
+        let meta = PatentMetadata {
+            canonical_id: "US1234567".to_string(),
+            jurisdiction: "US".to_string(),
+            doc_type: "patent".to_string(),
+            title: Some("Test Patent".to_string()),
+            abstract_text: Some("An abstract".to_string()),
+            inventors: vec!["Alice".to_string(), "Bob".to_string()],
+            assignee: Some("Test Corp".to_string()),
+            filing_date: Some("2023-06-15".to_string()),
+            publication_date: Some("2024-01-15".to_string()),
+            grant_date: Some("2024-06-01".to_string()),
+            fetched_at: "2026-01-01T00:00:00+00:00".to_string(),
+            legal_status: Some("Active".to_string()),
+        };
+        let json = serde_json::to_value(&meta).unwrap();
+        let back: PatentMetadata = serde_json::from_value(json).unwrap();
+        assert_eq!(back.canonical_id, meta.canonical_id);
+        assert_eq!(back.jurisdiction, meta.jurisdiction);
+        assert_eq!(back.doc_type, meta.doc_type);
+        assert_eq!(back.title, meta.title);
+        assert_eq!(back.abstract_text, meta.abstract_text);
+        assert_eq!(back.inventors, meta.inventors);
+        assert_eq!(back.assignee, meta.assignee);
+        assert_eq!(back.filing_date, meta.filing_date);
+        assert_eq!(back.publication_date, meta.publication_date);
+        assert_eq!(back.grant_date, meta.grant_date);
+        assert_eq!(back.fetched_at, meta.fetched_at);
+        assert_eq!(back.legal_status, meta.legal_status);
+    }
+
+    #[test]
+    fn patent_metadata_serde_accepts_abstract_alias() {
+        let json = serde_json::json!({
+            "canonical_id": "US9999999",
+            "jurisdiction": "US",
+            "doc_type": "patent",
+            "title": "Alias Test",
+            "abstract": "Deserialized via alias",
+            "inventors": [],
+            "fetched_at": "2026-01-01T00:00:00+00:00"
+        });
+        let meta: PatentMetadata = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            meta.abstract_text,
+            Some("Deserialized via alias".to_string())
+        );
+    }
+
+    #[test]
+    fn patent_metadata_serde_serializes_as_abstract_text() {
+        let meta = PatentMetadata {
+            canonical_id: "US1111111".to_string(),
+            jurisdiction: "US".to_string(),
+            doc_type: "patent".to_string(),
+            title: None,
+            abstract_text: Some("serialized field name".to_string()),
+            inventors: vec![],
+            assignee: None,
+            filing_date: None,
+            publication_date: None,
+            grant_date: None,
+            fetched_at: "2026-01-01T00:00:00+00:00".to_string(),
+            legal_status: None,
+        };
+        let json = serde_json::to_value(&meta).unwrap();
+        assert!(
+            json.get("abstract_text").is_some(),
+            "should serialize as abstract_text"
+        );
+        assert!(
+            json.get("abstract").is_none(),
+            "should not use alias for serialization"
+        );
+    }
 }

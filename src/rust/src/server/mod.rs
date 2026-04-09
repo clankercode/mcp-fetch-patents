@@ -119,6 +119,11 @@ fn tools_list() -> Value {
                         "postprocess_query": {
                             "type": "string",
                             "description": "Query for post-processing (stored for v2; no-op in v1)."
+                        },
+                        "formats": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Output formats to generate (e.g. [\"pdf\", \"txt\", \"md\"]). Default: all available formats."
                         }
                     },
                     "required": ["patent_ids"]
@@ -263,7 +268,7 @@ fn tools_list() -> Value {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "limit": {"type": "integer", "description": "Max sessions to return."}
+                        "limit": {"type": "integer", "description": "Max sessions to return. Default: 20."}
                     }
                 }
             },
@@ -345,25 +350,30 @@ async fn build_fetch_patents_payload(
         });
     }
 
-    let mut plan = Vec::with_capacity(patent_ids.len());
+    let start_total = std::time::Instant::now();
+
+    let mut plan: Vec<(String, FetchPlan)> = Vec::with_capacity(patent_ids.len());
     let mut valid_patents = Vec::new();
 
     for raw_id in patent_ids {
         let canon = crate::id_canon::canonicalize(raw_id);
         if canon.jurisdiction == "UNKNOWN" {
-            plan.push(FetchPlan::Invalid(crate::fetchers::OrchestratorResult {
-                canonical_id: canon.canonical,
-                success: false,
-                cache_dir: None,
-                files: HashMap::new(),
-                metadata: None,
-                sources: vec![],
-                error: Some(format!("Invalid patent ID: {}", raw_id)),
-                from_cache: false,
-            }));
+            plan.push((
+                raw_id.clone(),
+                FetchPlan::Invalid(crate::fetchers::OrchestratorResult {
+                    canonical_id: canon.canonical,
+                    success: false,
+                    cache_dir: None,
+                    files: HashMap::new(),
+                    metadata: None,
+                    sources: vec![],
+                    error: Some(format!("Invalid patent ID: {}", raw_id)),
+                    from_cache: false,
+                }),
+            ));
         } else {
             valid_patents.push(canon.clone());
-            plan.push(FetchPlan::Valid);
+            plan.push((raw_id.clone(), FetchPlan::Valid));
         }
     }
 
@@ -385,7 +395,7 @@ async fn build_fetch_patents_payload(
     let mut n_cached = 0u32;
     let mut n_errors = 0u32;
 
-    for item in plan {
+    for (raw_id, item) in plan {
         let orc = match item {
             FetchPlan::Invalid(result) => result,
             FetchPlan::Valid => valid_iter
@@ -404,25 +414,40 @@ async fn build_fetch_patents_payload(
             .as_ref()
             .map(|m| serde_json::to_value(m).unwrap_or(Value::Null));
 
-        if orc.from_cache {
+        let status = if orc.from_cache {
             n_cached += 1;
             n_success += 1;
+            "cached"
         } else if orc.success {
             n_success += 1;
+            "fetched"
+        } else if !files.is_empty() {
+            n_success += 1;
+            "partial"
         } else {
             n_errors += 1;
-        }
+            "error"
+        };
+
+        let fetch_duration_ms = orc
+            .sources
+            .iter()
+            .map(|s| s.elapsed_ms)
+            .sum::<f64>();
 
         results.push(serde_json::json!({
+            "patent_id": raw_id,
             "canonical_id": orc.canonical_id,
-            "success": orc.success,
-            "from_cache": orc.from_cache,
+            "status": status,
             "files": files,
             "metadata": metadata,
+            "sources": [],
+            "fetch_duration_ms": fetch_duration_ms,
             "error": orc.error,
         }));
     }
 
+    let total_duration_ms = start_total.elapsed().as_secs_f64() * 1000.0;
     let total = results.len() as u32;
     serde_json::json!({
         "results": results,
@@ -431,7 +456,7 @@ async fn build_fetch_patents_payload(
             "success": n_success,
             "cached": n_cached,
             "errors": n_errors,
-            "total_duration_ms": 0.0
+            "total_duration_ms": total_duration_ms
         }
     })
 }
@@ -555,6 +580,7 @@ async fn execute_tool_call(
         "fetch_patents" => {
             let patent_ids = get_str_array_param(&params, "patent_ids").unwrap_or_default();
             let force_refresh = get_bool_param(&params, "force_refresh").unwrap_or(false);
+            let _formats = get_str_array_param(&params, "formats");
 
             let payload = build_fetch_patents_payload(
                 &patent_ids,
@@ -1166,10 +1192,10 @@ async fn execute_tool_call(
         }
 
         "patent_session_list" => {
-            let limit = get_int_param(&params, "limit").map(|n| n as usize);
+            let limit = get_int_param(&params, "limit").map(|n| n as usize).unwrap_or(20);
 
             let sm = &backends.session_manager;
-            let summaries = sm.list_sessions(limit).await.unwrap_or_default();
+            let summaries = sm.list_sessions(Some(limit)).await.unwrap_or_default();
             let payload = serde_json::json!({
                 "sessions": summaries,
                 "total": summaries.len(),
@@ -1580,9 +1606,12 @@ mod tests {
         assert_eq!(payload["summary"]["total"], 2);
         assert_eq!(payload["summary"]["errors"], 1);
         assert_eq!(payload["summary"]["success"], 1);
-        assert_eq!(payload["results"][0]["success"], false);
+        assert_eq!(payload["results"][0]["status"], "error");
         assert!(payload["results"][0]["error"].as_str().unwrap().contains("Invalid patent ID"));
+        assert_eq!(payload["results"][0]["patent_id"], "INVALID-XXXXX-NOTREAL");
         assert_eq!(payload["results"][1]["canonical_id"], "US7654321");
+        assert_eq!(payload["results"][1]["patent_id"], "US7654321");
+        assert!(payload["summary"]["total_duration_ms"].as_f64().unwrap() >= 0.0);
     }
 
     #[test]
@@ -2138,5 +2167,32 @@ mod tests {
         let resp = execute_tool_call(Value::Number(1301.into()), load_params, &config, &cache, &orchestrator, &journal, &backends).await;
         let loaded = extract_payload(resp);
         assert_eq!(loaded["topic"], "structured-session-e2e");
+    }
+
+    #[test]
+    fn test_malformed_json_returns_parse_error() {
+        let line = r#"not json at all"#;
+        let config = make_config();
+        let resp = handle_line(line, &config).unwrap();
+        assert!(resp.error.is_some());
+        assert_eq!(resp.error.unwrap().code, -32700);
+    }
+
+    #[test]
+    fn test_empty_input_returns_error() {
+        let line = r#""#;
+        let config = make_config();
+        let resp = handle_line(line, &config).unwrap();
+        assert!(resp.error.is_some());
+    }
+
+    #[test]
+    fn test_ping_via_handle_line() {
+        let line = r#"{"jsonrpc":"2.0","id":99,"method":"ping"}"#;
+        let config = make_config();
+        let resp = handle_line(line, &config).unwrap();
+        assert!(resp.result.is_some());
+        assert!(resp.error.is_none());
+        assert!(resp.result.unwrap().as_object().unwrap().is_empty());
     }
 }

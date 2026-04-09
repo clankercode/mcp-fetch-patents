@@ -26,9 +26,13 @@ def pytest_configure(config):
 @pytest.fixture(scope="session")
 def rust_binary():
     """Build and return path to Rust binary."""
+    env = os.environ.copy()
+    env["CC"] = "gcc"
     result = subprocess.run(
         ["cargo", "build", "--manifest-path", str(RUST_DIR / "Cargo.toml")],
-        capture_output=True, text=True
+        capture_output=True,
+        text=True,
+        env=env,
     )
     assert result.returncode == 0, f"Rust build failed: {result.stderr}"
     assert RUST_BIN.exists(), f"Binary not found: {RUST_BIN}"
