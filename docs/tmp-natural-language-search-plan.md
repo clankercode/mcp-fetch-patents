@@ -2,17 +2,29 @@
 
 ## Current State
 
-- Natural-language patent search already exists, but only in the Python `patent-search` MCP server.
-- `patent_search_natural` currently just sends the raw description to SerpAPI Google Patents if `PATENT_SERPAPI_KEY` is set, then dedupes results.
-- Search sessions, exports, annotations, citation/family/classification tools already exist in Python.
-- There is no Rust-side search MCP yet.
-- The existing Playwright Google code is for fetching a patent detail page by ID, not for running Google Patents search flows.
+- Natural-language patent search exists in both Python and Rust MCP servers with full feature parity.
+- `patent_search_natural` uses a planner to generate multiple query variants, runs them against configured backends, dedupes, enriches, and reranks.
+- Search sessions, exports, annotations, citation/family/classification tools exist in both Python and Rust.
+- The Rust implementation covers all 13 search MCP tools, 3 search backends (SerpAPI, USPTO, EPO OPS), browser search via chromiumoxide, session persistence, profile management, and enrichment via the fetch pipeline.
+- 205 tests pass across the Rust codebase.
 
-Relevant code:
+Python code:
 - `src/python/patent_mcp/search/server.py`
 - `src/python/patent_mcp/search/searchers.py`
 - `src/python/patent_mcp/search/session_manager.py`
+- `src/python/patent_mcp/search/google_browser_backend.py`
+- `src/python/patent_mcp/search/profile_manager.py`
 - `src/python/patent_mcp/scrapers/google_patents.py`
+
+Rust code:
+- `src/rust/src/search/mod.rs` — module root
+- `src/rust/src/search/session_manager.rs` — session persistence
+- `src/rust/src/search/searchers.rs` — SerpAPI, USPTO, EPO OPS backends
+- `src/rust/src/search/profile_manager.rs` — browser profile locking
+- `src/rust/src/search/browser_search.rs` — Google Patents via chromiumoxide
+- `src/rust/src/server/mod.rs` — 16 tool descriptors + 13 tool handlers
+- `src/rust/src/planner.rs` — NL query planner
+- `src/rust/src/ranking.rs` — hit ranking/scoring
 
 ## Recommendation
 
@@ -66,7 +78,6 @@ And get back:
 
 ### 2. Non-Goals For V1
 
-- Full Rust port of the search server
 - Full autonomous prior-art agent loop
 - Citation graph crawling beyond current tools
 - Guaranteed Google account automation
@@ -88,7 +99,7 @@ Concrete integration points with the current codebase:
 - `searchers.py` remains where search backends live; the new Google browser backend should either live there or in a nearby module imported by it, not as a detached subsystem.
 - `session_manager.py` remains the persistence layer; v1 should keep using `QueryRecord` rather than introducing a second durable record type.
 - Enrichment should call the existing Python `FetcherOrchestrator` in `fetchers/orchestrator.py` directly, using canonical patent IDs and the existing cache/output conventions.
-- Rust remains out of scope for search in v1; search stays Python-first because the existing MCP search server, sessions, and backends already live there.
+- Rust enrichment uses the existing fetch pipeline in `src/rust/src/`.
 
 Suggested file additions:
 
@@ -475,22 +486,35 @@ Practical tightening for v1:
 
 ### 19. What I Would Not Do First
 
-- Port search to Rust immediately
 - Depend on Google login for baseline functionality
 - Use an LLM for every query generation step
 - Build citation crawling into the same first milestone
-- Make search browser logic part of the Rust fetch server
 
-### 20. Concrete Next Deliverable
+### 20. Implementation Status
 
-If we start implementation, I’d suggest this exact first milestone:
+All v1 deliverables are complete in both Python and Rust:
 
-1. Add `planner.py`
-2. Add `google_browser_backend.py` plus a subprocess wrapper entrypoint
-3. Extend `patent_search_natural` to use planner + backend
-4. Add `profile_manager.py` with profile locking and `login_start`
-5. Add parser fixtures and tests
-6. Add docs and a `just` smoke test
+**Python (pre-existing):**
+1. `planner.py` — deterministic NL-to-query planner
+2. `google_browser_backend.py` — Playwright-based Google Patents search
+3. `searchers.py` — SerpAPI, USPTO, EPO OPS backends
+4. `profile_manager.py` — persistent browser profile management
+5. `session_manager.py` — session persistence
+6. `ranking.py` — heuristic reranking
+
+**Rust (implemented this session):**
+1. `planner.rs` — deterministic NL-to-query planner
+2. `searchers.rs` — SerpAPI, USPTO, EPO OPS backends (JSON + XML)
+3. `browser_search.rs` — Google Patents via chromiumoxide
+4. `profile_manager.rs` — browser profile dirs with file-based locking
+5. `session_manager.rs` — session persistence with atomic JSON writes
+6. `ranking.rs` — heuristic reranking
+7. 13 MCP tool handlers wired into `server/mod.rs`
+8. 205 tests passing
+
+Remaining polish:
+- Update documentation (this doc, AGENTS.md)
+- Manual smoke tests with real backends
 
 ## Open Questions Before Implementation
 

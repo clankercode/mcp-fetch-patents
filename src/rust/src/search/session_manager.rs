@@ -360,7 +360,7 @@ impl SessionManager {
                     a.date
                         .as_deref()
                         .unwrap_or("")
-                        .cmp(&b.date.as_deref().unwrap_or(""))
+                        .cmp(b.date.as_deref().unwrap_or(""))
                 })
             });
 

@@ -28,6 +28,7 @@ impl SerpApiGooglePatentsBackend {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn search(
         &self,
         query: &str,

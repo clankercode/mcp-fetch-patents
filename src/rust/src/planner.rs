@@ -17,24 +17,155 @@ use std::collections::{HashMap, HashSet};
 static STOP_WORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     let mut s = HashSet::new();
     for w in &[
-        "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
-        "of", "with", "by", "from", "as", "is", "was", "are", "were", "be",
-        "been", "being", "have", "has", "had", "do", "does", "did", "will",
-        "would", "shall", "should", "may", "might", "can", "could", "must",
-        "about", "above", "after", "before", "between", "into", "through",
-        "during", "against", "without", "within", "along", "across", "behind",
-        "below", "beneath", "beside", "beyond", "under", "until", "upon",
-        "that", "this", "these", "those", "which", "who", "whom", "whose",
-        "what", "where", "when", "why", "how", "each", "every", "all", "any",
-        "both", "few", "more", "most", "other", "some", "such", "no", "nor",
-        "not", "only", "own", "same", "so", "than", "too", "very", "just",
-        "also", "then", "there", "here", "now", "it", "its", "they", "them",
-        "their", "we", "us", "our", "you", "your", "he", "him", "his", "she",
-        "her", "my", "me", "i", "using", "use", "used", "based", "related",
-        "new", "novel", "improved", "existing", "like", "similar", "etc",
-        "specifically", "particularly", "especially", "generally", "typically",
-        "works", "working", "work", "make", "makes", "made", "find", "look",
-        "looking", "search", "patent", "patents", "invention", "prior", "art",
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "in",
+        "on",
+        "at",
+        "to",
+        "for",
+        "of",
+        "with",
+        "by",
+        "from",
+        "as",
+        "is",
+        "was",
+        "are",
+        "were",
+        "be",
+        "been",
+        "being",
+        "have",
+        "has",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "shall",
+        "should",
+        "may",
+        "might",
+        "can",
+        "could",
+        "must",
+        "about",
+        "above",
+        "after",
+        "before",
+        "between",
+        "into",
+        "through",
+        "during",
+        "against",
+        "without",
+        "within",
+        "along",
+        "across",
+        "behind",
+        "below",
+        "beneath",
+        "beside",
+        "beyond",
+        "under",
+        "until",
+        "upon",
+        "that",
+        "this",
+        "these",
+        "those",
+        "which",
+        "who",
+        "whom",
+        "whose",
+        "what",
+        "where",
+        "when",
+        "why",
+        "how",
+        "each",
+        "every",
+        "all",
+        "any",
+        "both",
+        "few",
+        "more",
+        "most",
+        "other",
+        "some",
+        "such",
+        "no",
+        "nor",
+        "not",
+        "only",
+        "own",
+        "same",
+        "so",
+        "than",
+        "too",
+        "very",
+        "just",
+        "also",
+        "then",
+        "there",
+        "here",
+        "now",
+        "it",
+        "its",
+        "they",
+        "them",
+        "their",
+        "we",
+        "us",
+        "our",
+        "you",
+        "your",
+        "he",
+        "him",
+        "his",
+        "she",
+        "her",
+        "my",
+        "me",
+        "i",
+        "using",
+        "use",
+        "used",
+        "based",
+        "related",
+        "new",
+        "novel",
+        "improved",
+        "existing",
+        "like",
+        "similar",
+        "etc",
+        "specifically",
+        "particularly",
+        "especially",
+        "generally",
+        "typically",
+        "works",
+        "working",
+        "work",
+        "make",
+        "makes",
+        "made",
+        "find",
+        "look",
+        "looking",
+        "search",
+        "patent",
+        "patents",
+        "invention",
+        "prior",
+        "art",
     ] {
         s.insert(*w);
     }
@@ -49,110 +180,400 @@ static SYNONYMS: Lazy<HashMap<&'static str, Vec<&'static str>>> = Lazy::new(|| {
     let mut m = HashMap::new();
 
     // Power / Energy
-    m.insert("wireless charging", vec!["inductive coupling", "contactless power transfer", "wireless power transfer", "inductive power transfer"]);
-    m.insert("wireless power", vec!["contactless power", "inductive power", "wireless energy transfer"]);
-    m.insert("battery", vec!["energy storage device", "electrochemical cell", "rechargeable cell", "accumulator"]);
-    m.insert("solar cell", vec!["photovoltaic cell", "solar panel", "photovoltaic device", "PV cell"]);
-    m.insert("solar", vec!["photovoltaic", "solar energy", "solar radiation"]);
-    m.insert("fuel cell", vec!["electrochemical energy converter", "hydrogen fuel cell"]);
-    m.insert("capacitor", vec!["energy storage element", "charge storage device"]);
-    m.insert("supercapacitor", vec!["ultracapacitor", "electrochemical capacitor", "double-layer capacitor"]);
-    m.insert("transformer", vec!["magnetic core", "inductive device", "voltage converter"]);
+    m.insert(
+        "wireless charging",
+        vec![
+            "inductive coupling",
+            "contactless power transfer",
+            "wireless power transfer",
+            "inductive power transfer",
+        ],
+    );
+    m.insert(
+        "wireless power",
+        vec![
+            "contactless power",
+            "inductive power",
+            "wireless energy transfer",
+        ],
+    );
+    m.insert(
+        "battery",
+        vec![
+            "energy storage device",
+            "electrochemical cell",
+            "rechargeable cell",
+            "accumulator",
+        ],
+    );
+    m.insert(
+        "solar cell",
+        vec![
+            "photovoltaic cell",
+            "solar panel",
+            "photovoltaic device",
+            "PV cell",
+        ],
+    );
+    m.insert(
+        "solar",
+        vec!["photovoltaic", "solar energy", "solar radiation"],
+    );
+    m.insert(
+        "fuel cell",
+        vec!["electrochemical energy converter", "hydrogen fuel cell"],
+    );
+    m.insert(
+        "capacitor",
+        vec!["energy storage element", "charge storage device"],
+    );
+    m.insert(
+        "supercapacitor",
+        vec![
+            "ultracapacitor",
+            "electrochemical capacitor",
+            "double-layer capacitor",
+        ],
+    );
+    m.insert(
+        "transformer",
+        vec!["magnetic core", "inductive device", "voltage converter"],
+    );
     m.insert("inverter", vec!["power converter", "DC-AC converter"]);
 
     // Computing / AI
-    m.insert("machine learning", vec!["artificial intelligence", "neural network", "deep learning", "pattern recognition"]);
-    m.insert("neural network", vec!["deep learning model", "artificial neural network", "ANN"]);
-    m.insert("computer vision", vec!["image recognition", "visual processing", "image analysis", "object detection"]);
-    m.insert("natural language processing", vec!["NLP", "text analysis", "language understanding", "computational linguistics"]);
-    m.insert("blockchain", vec!["distributed ledger", "decentralized ledger", "cryptographic chain"]);
-    m.insert("cloud computing", vec!["distributed computing", "remote computing", "network computing"]);
-    m.insert("processor", vec!["CPU", "computing unit", "microprocessor", "processing element"]);
-    m.insert("memory", vec!["storage device", "data storage", "RAM", "cache memory"]);
-    m.insert("algorithm", vec!["computational method", "data processing method"]);
-    m.insert("encryption", vec!["cryptography", "cipher", "encoding", "data security"]);
-    m.insert("database", vec!["data store", "data repository", "data management system"]);
+    m.insert(
+        "machine learning",
+        vec![
+            "artificial intelligence",
+            "neural network",
+            "deep learning",
+            "pattern recognition",
+        ],
+    );
+    m.insert(
+        "neural network",
+        vec!["deep learning model", "artificial neural network", "ANN"],
+    );
+    m.insert(
+        "computer vision",
+        vec![
+            "image recognition",
+            "visual processing",
+            "image analysis",
+            "object detection",
+        ],
+    );
+    m.insert(
+        "natural language processing",
+        vec![
+            "NLP",
+            "text analysis",
+            "language understanding",
+            "computational linguistics",
+        ],
+    );
+    m.insert(
+        "blockchain",
+        vec![
+            "distributed ledger",
+            "decentralized ledger",
+            "cryptographic chain",
+        ],
+    );
+    m.insert(
+        "cloud computing",
+        vec![
+            "distributed computing",
+            "remote computing",
+            "network computing",
+        ],
+    );
+    m.insert(
+        "processor",
+        vec![
+            "CPU",
+            "computing unit",
+            "microprocessor",
+            "processing element",
+        ],
+    );
+    m.insert(
+        "memory",
+        vec!["storage device", "data storage", "RAM", "cache memory"],
+    );
+    m.insert(
+        "algorithm",
+        vec!["computational method", "data processing method"],
+    );
+    m.insert(
+        "encryption",
+        vec!["cryptography", "cipher", "encoding", "data security"],
+    );
+    m.insert(
+        "database",
+        vec!["data store", "data repository", "data management system"],
+    );
 
     // Manufacturing
-    m.insert("3d printing", vec!["additive manufacturing", "rapid prototyping", "three-dimensional printing", "fused deposition modeling"]);
-    m.insert("robot", vec!["robotic system", "automated manipulator", "robotic device"]);
+    m.insert(
+        "3d printing",
+        vec![
+            "additive manufacturing",
+            "rapid prototyping",
+            "three-dimensional printing",
+            "fused deposition modeling",
+        ],
+    );
+    m.insert(
+        "robot",
+        vec!["robotic system", "automated manipulator", "robotic device"],
+    );
     m.insert("robotic", vec!["automated", "autonomous", "mechanized"]);
-    m.insert("sensor", vec!["detector", "transducer", "sensing element", "measuring device"]);
-    m.insert("actuator", vec!["drive mechanism", "motor", "activating element"]);
-    m.insert("laser", vec!["coherent light source", "optical amplifier", "laser beam"]);
+    m.insert(
+        "sensor",
+        vec![
+            "detector",
+            "transducer",
+            "sensing element",
+            "measuring device",
+        ],
+    );
+    m.insert(
+        "actuator",
+        vec!["drive mechanism", "motor", "activating element"],
+    );
+    m.insert(
+        "laser",
+        vec!["coherent light source", "optical amplifier", "laser beam"],
+    );
     m.insert("welding", vec!["joining", "bonding", "fusion bonding"]);
     m.insert("mold", vec!["mould", "die", "casting form"]);
-    m.insert("cnc", vec!["computer numerical control", "numerically controlled"]);
+    m.insert(
+        "cnc",
+        vec!["computer numerical control", "numerically controlled"],
+    );
 
     // Medical / Bio
-    m.insert("drug delivery", vec!["pharmaceutical delivery", "therapeutic delivery", "controlled release", "drug administration"]);
-    m.insert("medical device", vec!["biomedical device", "clinical device", "therapeutic apparatus"]);
-    m.insert("implant", vec!["prosthesis", "prosthetic device", "biocompatible implant"]);
-    m.insert("stent", vec!["vascular scaffold", "endovascular implant", "tubular implant"]);
-    m.insert("catheter", vec!["intravascular device", "tubular medical device"]);
+    m.insert(
+        "drug delivery",
+        vec![
+            "pharmaceutical delivery",
+            "therapeutic delivery",
+            "controlled release",
+            "drug administration",
+        ],
+    );
+    m.insert(
+        "medical device",
+        vec![
+            "biomedical device",
+            "clinical device",
+            "therapeutic apparatus",
+        ],
+    );
+    m.insert(
+        "implant",
+        vec!["prosthesis", "prosthetic device", "biocompatible implant"],
+    );
+    m.insert(
+        "stent",
+        vec![
+            "vascular scaffold",
+            "endovascular implant",
+            "tubular implant",
+        ],
+    );
+    m.insert(
+        "catheter",
+        vec!["intravascular device", "tubular medical device"],
+    );
     m.insert("antibody", vec!["immunoglobulin", "monoclonal antibody"]);
     m.insert("protein", vec!["polypeptide", "amino acid sequence"]);
-    m.insert("dna", vec!["nucleic acid", "polynucleotide", "genetic material"]);
-    m.insert("gene therapy", vec!["genetic therapy", "gene transfer", "gene editing"]);
+    m.insert(
+        "dna",
+        vec!["nucleic acid", "polynucleotide", "genetic material"],
+    );
+    m.insert(
+        "gene therapy",
+        vec!["genetic therapy", "gene transfer", "gene editing"],
+    );
     m.insert("diagnostic", vec!["detection method", "assay", "screening"]);
 
     // Materials
-    m.insert("composite", vec!["composite material", "fiber-reinforced material", "laminate"]);
-    m.insert("polymer", vec!["plastic", "resin", "thermoplastic", "synthetic resin"]);
-    m.insert("semiconductor", vec!["integrated circuit", "chip", "transistor", "silicon device"]);
-    m.insert("nanoparticle", vec!["nanomaterial", "nano-sized particle", "nanostructure"]);
-    m.insert("coating", vec!["surface treatment", "film", "layer", "surface coating"]);
+    m.insert(
+        "composite",
+        vec![
+            "composite material",
+            "fiber-reinforced material",
+            "laminate",
+        ],
+    );
+    m.insert(
+        "polymer",
+        vec!["plastic", "resin", "thermoplastic", "synthetic resin"],
+    );
+    m.insert(
+        "semiconductor",
+        vec!["integrated circuit", "chip", "transistor", "silicon device"],
+    );
+    m.insert(
+        "nanoparticle",
+        vec!["nanomaterial", "nano-sized particle", "nanostructure"],
+    );
+    m.insert(
+        "coating",
+        vec!["surface treatment", "film", "layer", "surface coating"],
+    );
     m.insert("alloy", vec!["metal composition", "metallic mixture"]);
     m.insert("ceramic", vec!["sintered material", "oxide material"]);
-    m.insert("graphene", vec!["carbon nanostructure", "two-dimensional carbon"]);
+    m.insert(
+        "graphene",
+        vec!["carbon nanostructure", "two-dimensional carbon"],
+    );
 
     // Transport
-    m.insert("autonomous vehicle", vec!["self-driving vehicle", "driverless vehicle", "automated driving system"]);
-    m.insert("electric vehicle", vec!["EV", "electric car", "battery electric vehicle", "electric motor vehicle"]);
-    m.insert("lidar", vec!["light detection and ranging", "laser scanner", "optical radar"]);
-    m.insert("radar", vec!["radio detection and ranging", "microwave sensor"]);
+    m.insert(
+        "autonomous vehicle",
+        vec![
+            "self-driving vehicle",
+            "driverless vehicle",
+            "automated driving system",
+        ],
+    );
+    m.insert(
+        "electric vehicle",
+        vec![
+            "EV",
+            "electric car",
+            "battery electric vehicle",
+            "electric motor vehicle",
+        ],
+    );
+    m.insert(
+        "lidar",
+        vec![
+            "light detection and ranging",
+            "laser scanner",
+            "optical radar",
+        ],
+    );
+    m.insert(
+        "radar",
+        vec!["radio detection and ranging", "microwave sensor"],
+    );
 
     // Communication
-    m.insert("antenna", vec!["aerial", "radiator", "electromagnetic radiator"]);
-    m.insert("wireless", vec!["radio frequency", "RF", "electromagnetic", "over-the-air"]);
-    m.insert("optical fiber", vec!["fibre optic", "optical waveguide", "light guide"]);
+    m.insert(
+        "antenna",
+        vec!["aerial", "radiator", "electromagnetic radiator"],
+    );
+    m.insert(
+        "wireless",
+        vec!["radio frequency", "RF", "electromagnetic", "over-the-air"],
+    );
+    m.insert(
+        "optical fiber",
+        vec!["fibre optic", "optical waveguide", "light guide"],
+    );
     m.insert("5g", vec!["fifth generation", "new radio", "NR", "mmWave"]);
-    m.insert("bluetooth", vec!["short-range wireless", "personal area network"]);
+    m.insert(
+        "bluetooth",
+        vec!["short-range wireless", "personal area network"],
+    );
 
     // Mechanical / structural
-    m.insert("valve", vec!["flow control device", "gate valve", "control element"]);
-    m.insert("bearing", vec!["rotational support", "journal bearing", "bushing"]);
-    m.insert("spring", vec!["elastic element", "resilient member", "biasing element"]);
-    m.insert("gear", vec!["toothed wheel", "transmission element", "cogwheel"]);
+    m.insert(
+        "valve",
+        vec!["flow control device", "gate valve", "control element"],
+    );
+    m.insert(
+        "bearing",
+        vec!["rotational support", "journal bearing", "bushing"],
+    );
+    m.insert(
+        "spring",
+        vec!["elastic element", "resilient member", "biasing element"],
+    );
+    m.insert(
+        "gear",
+        vec!["toothed wheel", "transmission element", "cogwheel"],
+    );
     m.insert("seal", vec!["gasket", "sealing element", "O-ring"]);
     m.insert("hinge", vec!["pivot", "articulation", "rotary joint"]);
-    m.insert("filter", vec!["filtration device", "separation element", "strainer"]);
-    m.insert("pump", vec!["fluid mover", "compressor", "fluid displacement device"]);
-    m.insert("heat exchanger", vec!["thermal exchanger", "heat transfer device", "radiator"]);
+    m.insert(
+        "filter",
+        vec!["filtration device", "separation element", "strainer"],
+    );
+    m.insert(
+        "pump",
+        vec!["fluid mover", "compressor", "fluid displacement device"],
+    );
+    m.insert(
+        "heat exchanger",
+        vec!["thermal exchanger", "heat transfer device", "radiator"],
+    );
     m.insert("turbine", vec!["rotary engine", "turbo machine"]);
 
     // Optics / Display
-    m.insert("display", vec!["screen", "monitor", "visual display", "panel"]);
-    m.insert("led", vec!["light emitting diode", "solid-state light", "electroluminescent device"]);
-    m.insert("oled", vec!["organic light emitting diode", "organic electroluminescent"]);
+    m.insert(
+        "display",
+        vec!["screen", "monitor", "visual display", "panel"],
+    );
+    m.insert(
+        "led",
+        vec![
+            "light emitting diode",
+            "solid-state light",
+            "electroluminescent device",
+        ],
+    );
+    m.insert(
+        "oled",
+        vec!["organic light emitting diode", "organic electroluminescent"],
+    );
     m.insert("lens", vec!["optical element", "refractive element"]);
-    m.insert("camera", vec!["image sensor", "imaging device", "image capture device"]);
+    m.insert(
+        "camera",
+        vec!["image sensor", "imaging device", "image capture device"],
+    );
 
     // General patent language
     m.insert("method", vec!["process", "technique", "procedure"]);
-    m.insert("device", vec!["apparatus", "system", "equipment", "mechanism"]);
-    m.insert("coupled", vec!["connected", "attached", "linked", "joined", "fastened"]);
-    m.insert("disposed", vec!["positioned", "arranged", "located", "situated"]);
-    m.insert("adjacent", vec!["proximate", "near", "neighboring", "abutting"]);
+    m.insert(
+        "device",
+        vec!["apparatus", "system", "equipment", "mechanism"],
+    );
+    m.insert(
+        "coupled",
+        vec!["connected", "attached", "linked", "joined", "fastened"],
+    );
+    m.insert(
+        "disposed",
+        vec!["positioned", "arranged", "located", "situated"],
+    );
+    m.insert(
+        "adjacent",
+        vec!["proximate", "near", "neighboring", "abutting"],
+    );
     m.insert("layer", vec!["film", "coating", "stratum"]);
     m.insert("surface", vec!["face", "exterior", "outer surface"]);
     m.insert("housing", vec!["enclosure", "casing", "chassis", "body"]);
     m.insert("opening", vec!["aperture", "orifice", "hole", "port"]);
     m.insert("channel", vec!["conduit", "passage", "duct", "groove"]);
     m.insert("substrate", vec!["base", "foundation", "support layer"]);
-    m.insert("controller", vec!["control unit", "control module", "processor"]);
-    m.insert("signal", vec!["data signal", "electrical signal", "communication signal"]);
-    m.insert("circuit", vec!["electronic circuit", "circuitry", "electrical circuit"]);
+    m.insert(
+        "controller",
+        vec!["control unit", "control module", "processor"],
+    );
+    m.insert(
+        "signal",
+        vec!["data signal", "electrical signal", "communication signal"],
+    );
+    m.insert(
+        "circuit",
+        vec!["electronic circuit", "circuitry", "electrical circuit"],
+    );
     m.insert("module", vec!["unit", "component", "assembly"]);
     m.insert("interface", vec!["connection", "port", "coupling"]);
 
@@ -162,15 +583,13 @@ static SYNONYMS: Lazy<HashMap<&'static str, Vec<&'static str>>> = Lazy::new(|| {
 /// Pre-sorted synonym keys (longest first) for deterministic multi-word matching.
 static SYNONYMS_SORTED: Lazy<Vec<&'static str>> = Lazy::new(|| {
     let mut keys: Vec<&'static str> = SYNONYMS.keys().copied().collect();
-    keys.sort_by(|a, b| b.len().cmp(&a.len()));
+    keys.sort_by_key(|k| std::cmp::Reverse(k.len()));
     keys
 });
 
 /// Regex for extracting single-word tokens from lowercased text.
 /// Allows leading digits to catch terms like "5g".
-static WORD_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\b[a-z0-9][a-z0-9-]*[a-z0-9]\b").unwrap()
-});
+static WORD_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b[a-z0-9][a-z0-9-]*[a-z0-9]\b").unwrap());
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -217,7 +636,11 @@ impl NaturalLanguagePlanner {
         let concepts = Self::extract_concepts(description);
         let synonyms = Self::expand_synonyms(&concepts);
         let variants = Self::generate_variants(
-            description, &concepts, &synonyms, date_cutoff, jurisdictions,
+            description,
+            &concepts,
+            &synonyms,
+            date_cutoff,
+            jurisdictions,
         );
         let rationale = Self::build_rationale(&concepts, &synonyms);
 
@@ -268,9 +691,7 @@ impl NaturalLanguagePlanner {
 
         let mut single_words: Vec<String> = words
             .into_iter()
-            .filter(|w| {
-                w != "_" && w.len() > 1 && !STOP_WORDS.contains(w.as_str())
-            })
+            .filter(|w| w != "_" && w.len() > 1 && !STOP_WORDS.contains(w.as_str()))
             .collect();
 
         // Also check single-word synonym keys against the original text
@@ -301,11 +722,7 @@ impl NaturalLanguagePlanner {
         // Deduplicate while preserving order
         let mut seen = HashSet::new();
         let mut result: Vec<String> = Vec::new();
-        for c in found_phrases
-            .into_iter()
-            .chain(promoted)
-            .chain(remainder)
-        {
+        for c in found_phrases.into_iter().chain(promoted).chain(remainder) {
             if seen.insert(c.clone()) {
                 result.push(c);
             }
@@ -375,11 +792,7 @@ impl NaturalLanguagePlanner {
             }
             if !parts.is_empty() {
                 // cap at 6 groups to keep query manageable
-                let q = parts
-                    .into_iter()
-                    .take(6)
-                    .collect::<Vec<_>>()
-                    .join(" AND ");
+                let q = parts.into_iter().take(6).collect::<Vec<_>>().join(" AND ");
                 variants.push(QueryVariant {
                     query: q,
                     variant_type: "synonym_expanded".to_string(),
@@ -470,10 +883,7 @@ impl NaturalLanguagePlanner {
     // Rationale
     // ------------------------------------------------------------------
 
-    fn build_rationale(
-        concepts: &[String],
-        synonyms: &HashMap<String, Vec<String>>,
-    ) -> String {
+    fn build_rationale(concepts: &[String], synonyms: &HashMap<String, Vec<String>>) -> String {
         let concepts_display: Vec<&str> = concepts.iter().take(8).map(|s| s.as_str()).collect();
         let mut parts = vec![format!(
             "Extracted {} concepts: {}",
@@ -507,9 +917,8 @@ mod tests {
 
     #[test]
     fn concept_extraction_wireless_charging() {
-        let concepts = NaturalLanguagePlanner::extract_concepts(
-            "wireless charging through metal barriers",
-        );
+        let concepts =
+            NaturalLanguagePlanner::extract_concepts("wireless charging through metal barriers");
         assert!(
             concepts.contains(&"wireless charging".to_string()),
             "Expected 'wireless charging' in concepts: {:?}",
@@ -546,7 +955,11 @@ mod tests {
             .iter()
             .map(|v| v.variant_type.as_str())
             .collect();
-        assert!(types.contains(&"broad"), "Expected 'broad' variant, got: {:?}", types);
+        assert!(
+            types.contains(&"broad"),
+            "Expected 'broad' variant, got: {:?}",
+            types
+        );
         assert!(
             types.contains(&"synonym_expanded"),
             "Expected 'synonym_expanded' variant, got: {:?}",
@@ -591,14 +1004,19 @@ mod tests {
     fn stop_words_table_matches_python() {
         // Spot-check several stop words that are present in the Python set
         for w in &[
-            "a", "the", "using", "patent", "invention", "prior", "art",
-            "specifically", "particularly", "looking", "search",
+            "a",
+            "the",
+            "using",
+            "patent",
+            "invention",
+            "prior",
+            "art",
+            "specifically",
+            "particularly",
+            "looking",
+            "search",
         ] {
-            assert!(
-                STOP_WORDS.contains(w),
-                "Expected '{}' in stop words",
-                w
-            );
+            assert!(STOP_WORDS.contains(w), "Expected '{}' in stop words", w);
         }
     }
 
@@ -640,9 +1058,8 @@ mod tests {
     #[test]
     fn concept_extraction_deduplicates() {
         // "wireless" appears both as multi-word phrase part and single word synonym key
-        let concepts = NaturalLanguagePlanner::extract_concepts(
-            "wireless charging wireless device",
-        );
+        let concepts =
+            NaturalLanguagePlanner::extract_concepts("wireless charging wireless device");
         let count = concepts.iter().filter(|c| *c == "wireless").count();
         assert!(
             count <= 1,

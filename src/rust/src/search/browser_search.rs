@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use anyhow::Result;
 use chromiumoxide::browser::{Browser, BrowserConfig};
@@ -9,6 +10,17 @@ use tracing::warn;
 
 use crate::ranking::PatentHit;
 use crate::search::profile_manager::ProfileManager;
+
+static PATENT_HREF_RE: OnceLock<Regex> = OnceLock::new();
+static PATENT_BODY_RE: OnceLock<Regex> = OnceLock::new();
+
+fn patent_href_re() -> &'static Regex {
+    PATENT_HREF_RE.get_or_init(|| Regex::new(r"/patent/([A-Z]{2}[A-Z0-9/\-]+?)(?:/|$)").unwrap())
+}
+
+fn patent_body_re() -> &'static Regex {
+    PATENT_BODY_RE.get_or_init(|| Regex::new(r"\b([A-Z]{2}\d{5,12}[A-Z]?\d?)\b").unwrap())
+}
 
 pub struct GooglePatentsBrowserSearch {
     profile_manager: ProfileManager,
@@ -215,7 +227,7 @@ async fn extract_patent_hits(page: &Page, debug_html_dir: &Option<PathBuf>) -> V
 
 async fn strategy_structured_elements(page: &Page) -> Vec<PatentHit> {
     let selectors = ["search-result-item", ".result-item", "article"];
-    let patent_id_re = Regex::new(r"/patent/([A-Z]{2}[A-Z0-9/\-]+?)(?:/|$)").unwrap();
+     let patent_id_re = patent_href_re();
 
     for &sel in &selectors {
         let elements = match page.find_elements(sel).await {
@@ -273,7 +285,7 @@ async fn strategy_structured_elements(page: &Page) -> Vec<PatentHit> {
 }
 
 async fn strategy_patent_links(page: &Page) -> Vec<PatentHit> {
-    let patent_id_re = Regex::new(r"/patent/([A-Z]{2}[A-Z0-9/\-]+?)(?:/|$)").unwrap();
+     let patent_id_re = patent_href_re();
 
     let links = match page.find_elements("a[href*='/patent/']").await {
         Ok(l) => l,
@@ -332,7 +344,7 @@ async fn strategy_regex_body(page: &Page) -> Vec<PatentHit> {
         Err(_) => return vec![],
     };
 
-    let re = Regex::new(r"\b([A-Z]{2}\d{5,12}[A-Z]?\d?)\b").unwrap();
+    let re = patent_body_re();
     let mut hits = Vec::new();
     let mut seen = std::collections::HashSet::new();
 

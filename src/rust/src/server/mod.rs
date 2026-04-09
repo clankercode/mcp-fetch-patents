@@ -311,6 +311,7 @@ fn tools_list() -> Value {
     })
 }
 
+#[allow(clippy::large_enum_variant)]
 enum FetchPlan {
     Invalid(crate::fetchers::OrchestratorResult),
     Valid,
@@ -1236,7 +1237,7 @@ async fn execute_tool_call(
             let pn_for_task = profile_name.clone();
             tokio::spawn(async move {
                 use futures::StreamExt;
-                while let Some(_) = handler.next().await {}
+                while handler.next().await.is_some() {}
                 drop(browser);
                 let _ = pm_for_task.release_lock(&pn_for_task);
             });

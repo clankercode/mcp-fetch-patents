@@ -34,11 +34,7 @@ fn pid_alive(pid: u32) -> bool {
             return true;
         }
         let errno = *libc::__errno_location();
-        if errno == libc::ESRCH {
-            false
-        } else {
-            true
-        }
+        errno != libc::ESRCH
     }
 }
 
@@ -176,15 +172,12 @@ impl ProfileManager {
         if !lp.exists() {
             return Ok(());
         }
-        match fs::read_to_string(&lp) {
-            Ok(data) => {
-                if let Ok(lock) = serde_json::from_str::<ProfileLock>(&data) {
-                    if lock.pid == std::process::id() && lock.hostname == current_hostname() {
-                        let _ = fs::remove_file(&lp);
-                    }
+        if let Ok(data) = fs::read_to_string(&lp) {
+            if let Ok(lock) = serde_json::from_str::<ProfileLock>(&data) {
+                if lock.pid == std::process::id() && lock.hostname == current_hostname() {
+                    let _ = fs::remove_file(&lp);
                 }
             }
-            Err(_) => {}
         }
         Ok(())
     }

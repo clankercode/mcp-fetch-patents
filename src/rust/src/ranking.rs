@@ -74,7 +74,7 @@ impl SearchRanker {
         let mut query_counts: HashMap<String, usize> = HashMap::new();
         let mut merged: HashMap<String, PatentHit> = HashMap::new();
 
-        for (_query, hits) in hits_by_query {
+        for hits in hits_by_query.values() {
             for hit in hits {
                 let pid = &hit.patent_id;
                 *query_counts.entry(pid.clone()).or_insert(0) += 1;
@@ -112,7 +112,7 @@ impl SearchRanker {
 
             // Multi-query bonus: found by N variants -> high signal
             let n_queries = *query_counts.get(pid).unwrap_or(&1);
-            let bonus = (n_queries as isize - 1).min(4).max(0) as f64 * 1.5;
+            let bonus = ((n_queries as isize - 1).clamp(0, 4)) as f64 * 1.5;
             breakdown.insert("multi_query_bonus".to_string(), bonus);
 
             // Date satisfaction
@@ -122,10 +122,7 @@ impl SearchRanker {
             );
 
             // Metadata completeness
-            breakdown.insert(
-                "completeness".to_string(),
-                metadata_richness(hit) * 0.3,
-            );
+            breakdown.insert("completeness".to_string(), metadata_richness(hit) * 0.3);
 
             let total: f64 = breakdown.values().sum();
 
@@ -137,7 +134,11 @@ impl SearchRanker {
             });
         }
 
-        scored.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        scored.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         scored
     }
 }
@@ -194,8 +195,16 @@ fn date_score(date_str: Option<&str>, cutoff: Option<&str>) -> f64 {
     };
 
     // Normalise to comparable strings (YYYYMMDD): strip non-digits, take first 8
-    let hit_date: String = date_str.chars().filter(|c| c.is_ascii_digit()).take(8).collect();
-    let cut_date: String = cutoff.chars().filter(|c| c.is_ascii_digit()).take(8).collect();
+    let hit_date: String = date_str
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .take(8)
+        .collect();
+    let cut_date: String = cutoff
+        .chars()
+        .filter(|c| c.is_ascii_digit())
+        .take(8)
+        .collect();
 
     if hit_date.is_empty() || hit_date.len() < 4 {
         return 0.3;
@@ -277,21 +286,30 @@ mod tests {
     fn text_coverage_full_match() {
         let concepts = vec!["neural".to_string(), "network".to_string()];
         let score = text_coverage(Some("Neural Network Architecture"), &concepts);
-        assert!((score - 1.0).abs() < f64::EPSILON, "expected 1.0, got {score}");
+        assert!(
+            (score - 1.0).abs() < f64::EPSILON,
+            "expected 1.0, got {score}"
+        );
     }
 
     #[test]
     fn text_coverage_partial_match() {
         let concepts = vec!["neural".to_string(), "quantum".to_string()];
         let score = text_coverage(Some("Neural Network Architecture"), &concepts);
-        assert!((score - 0.5).abs() < f64::EPSILON, "expected 0.5, got {score}");
+        assert!(
+            (score - 0.5).abs() < f64::EPSILON,
+            "expected 0.5, got {score}"
+        );
     }
 
     #[test]
     fn text_coverage_no_match() {
         let concepts = vec!["quantum".to_string(), "entanglement".to_string()];
         let score = text_coverage(Some("Neural Network Architecture"), &concepts);
-        assert!((score - 0.0).abs() < f64::EPSILON, "expected 0.0, got {score}");
+        assert!(
+            (score - 0.0).abs() < f64::EPSILON,
+            "expected 0.0, got {score}"
+        );
     }
 
     #[test]
