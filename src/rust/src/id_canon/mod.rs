@@ -3,9 +3,9 @@
 //! Parses any patent ID format (US, EP, WO, JP, CN, KR, AU, CA, NZ, BR, IN,
 //! generic ISO, and URL forms) into a canonical struct.
 
-use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 
 /// Canonicalized patent identifier.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -24,76 +24,66 @@ pub struct CanonicalPatentId {
 // Compiled regex patterns
 // ---------------------------------------------------------------------------
 
-static US_GRANTED_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^US\s*([0-9]{6,8})([A-Z][0-9]?)?$").unwrap()
-});
+static US_GRANTED_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^US\s*([0-9]{6,8})([A-Z][0-9]?)?$").unwrap());
 
-static US_APP_RE: Lazy<Regex> = Lazy::new(|| {
+static US_APP_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^US\s*(20[0-9]{2})[/\-]?([0-9]{6,7})([A-Z][0-9]?)?$").unwrap()
 });
 
-static US_BARE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^([0-9]{6,8})$").unwrap()
+static US_BARE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^([0-9]{6,8})$").unwrap());
+
+static EP_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^EP\s*([0-9]{5,8})([A-Z][0-9]?)?$").unwrap());
+
+static WO_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^(?:WO|PCT)[/\s]*((?:19|20)[0-9]{2})[/\s]*([0-9]{5,8})([A-Z][0-9]?)?$")
+        .unwrap()
 });
 
-static EP_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^EP\s*([0-9]{5,8})([A-Z][0-9]?)?$").unwrap()
-});
-
-static WO_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^(?:WO|PCT)[/\s]*((?:19|20)[0-9]{2})[/\s]*([0-9]{5,8})([A-Z][0-9]?)?$").unwrap()
-});
-
-static JP_MODERN_RE: Lazy<Regex> = Lazy::new(|| {
+static JP_MODERN_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^JP\s*((?:19|20)[0-9]{2})[/\-]?([0-9]{6,7})([A-Z][0-9]?)?$").unwrap()
 });
 
-static JP_BARE_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^JP\s*([0-9]{7,8})([A-Z][0-9]?)?$").unwrap()
-});
+static JP_BARE_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^JP\s*([0-9]{7,8})([A-Z][0-9]?)?$").unwrap());
 
-static CN_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^CN\s*((?:19|20)?[0-9]{6,10})([A-Z][0-9]?)?$").unwrap()
-});
+static CN_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^CN\s*((?:19|20)?[0-9]{6,10})([A-Z][0-9]?)?$").unwrap());
 
-static KR_APP_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^KR\s*10-([0-9]{4})-([0-9]{7})([A-Z][0-9]?)?$").unwrap()
-});
+static KR_APP_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^KR\s*10-([0-9]{4})-([0-9]{7})([A-Z][0-9]?)?$").unwrap());
 
-static KR_GRANTED_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^KR\s*10-?([0-9]{7,8})([A-Z][0-9]?)?$").unwrap()
-});
+static KR_GRANTED_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^KR\s*10-?([0-9]{7,8})([A-Z][0-9]?)?$").unwrap());
 
-static AU_RE: Lazy<Regex> = Lazy::new(|| {
+static AU_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^AU\s*((?:19|20)[0-9]{2}[0-9]{4,7})([A-Z][0-9]?)?$").unwrap()
 });
 
-static CA_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^CA\s*([0-9]{5,8})([A-Z][0-9]?)?$").unwrap()
-});
+static CA_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^CA\s*([0-9]{5,8})([A-Z][0-9]?)?$").unwrap());
 
-static NZ_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^NZ\s*([0-9]{5,8})([A-Z][0-9]?)?$").unwrap()
-});
+static NZ_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^NZ\s*([0-9]{5,8})([A-Z][0-9]?)?$").unwrap());
 
-static BR_RE: Lazy<Regex> = Lazy::new(|| {
+static BR_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^BR\s*((?:10|11|20|PI|MU|DI)[0-9]{6,8})([A-Z][0-9]?)?$").unwrap()
 });
 
-static IN_RE: Lazy<Regex> = Lazy::new(|| {
+static IN_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^IN\s*([0-9]+(?:/[A-Z]+/[0-9]{4})?)([A-Z][0-9]?)?$").unwrap()
 });
 
-static ISO_GENERIC_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)^([A-Z]{2})\s*([0-9][0-9A-Z]{4,})([A-Z][0-9]?)?$").unwrap()
-});
+static ISO_GENERIC_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^([A-Z]{2})\s*([0-9][0-9A-Z]{4,})([A-Z][0-9]?)?$").unwrap());
 
 // URL patterns
-static GOOGLE_PATENTS_RE: Lazy<Regex> = Lazy::new(|| {
+static GOOGLE_PATENTS_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)patents\.google\.com/patent/([A-Z]{2}[0-9][0-9A-Z]*)").unwrap()
 });
 
-static ESPACENET_RE: Lazy<Regex> = Lazy::new(|| {
+static ESPACENET_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)espacenet\.com.*?/([A-Z]{2}[0-9][0-9A-Z]*)(?:/|\?|$)").unwrap()
 });
 
@@ -187,7 +177,11 @@ pub fn canonicalize(raw: &str) -> CanonicalPatentId {
     // Python canonical: raw_id.upper().replace(" ", ""), or "UNKNOWN" if empty
     let canonical_fallback = {
         let up = raw.to_uppercase().replace(' ', "");
-        if up.is_empty() { "UNKNOWN".to_string() } else { up }
+        if up.is_empty() {
+            "UNKNOWN".to_string()
+        } else {
+            up
+        }
     };
     CanonicalPatentId {
         raw: raw.to_string(),
@@ -247,7 +241,15 @@ fn try_us_application(s: &str, raw: &str) -> Option<CanonicalPatentId> {
     let kind = cap.get(3).map(|m| m.as_str().to_string());
     let number = format!("{}{}", year, serial);
     let canonical = format!("US{}", number);
-    Some(make_ok(raw, canonical, "US", number, kind, "application", Some(year)))
+    Some(make_ok(
+        raw,
+        canonical,
+        "US",
+        number,
+        kind,
+        "application",
+        Some(year),
+    ))
 }
 
 fn try_us_bare(s: &str, raw: &str) -> Option<CanonicalPatentId> {
@@ -274,7 +276,15 @@ fn try_wo(s: &str, raw: &str) -> Option<CanonicalPatentId> {
     // Python canonical: WO<year><serial> (no slash separator)
     let number = format!("{}{}", year, serial);
     let canonical = format!("WO{}{}", year, serial);
-    Some(make_ok(raw, canonical, "WO", number, kind, "application", Some(year)))
+    Some(make_ok(
+        raw,
+        canonical,
+        "WO",
+        number,
+        kind,
+        "application",
+        Some(year),
+    ))
 }
 
 fn try_jp_modern(s: &str, raw: &str) -> Option<CanonicalPatentId> {
@@ -284,7 +294,15 @@ fn try_jp_modern(s: &str, raw: &str) -> Option<CanonicalPatentId> {
     let kind = cap.get(3).map(|m| m.as_str().to_string());
     let number = format!("{}{}", year, serial);
     let canonical = format!("JP{}", number);
-    Some(make_ok(raw, canonical, "JP", number, kind, "application", Some(year)))
+    Some(make_ok(
+        raw,
+        canonical,
+        "JP",
+        number,
+        kind,
+        "application",
+        Some(year),
+    ))
 }
 
 fn try_jp_bare(s: &str, raw: &str) -> Option<CanonicalPatentId> {
@@ -314,7 +332,15 @@ fn try_kr_app(s: &str, raw: &str) -> Option<CanonicalPatentId> {
     let kind = cap.get(3).map(|m| m.as_str().to_string());
     let number = format!("10-{}-{}", year, serial);
     let canonical = format!("KR{}", number);
-    Some(make_ok(raw, canonical, "KR", number, kind, "application", Some(year)))
+    Some(make_ok(
+        raw,
+        canonical,
+        "KR",
+        number,
+        kind,
+        "application",
+        Some(year),
+    ))
 }
 
 fn try_kr_granted(s: &str, raw: &str) -> Option<CanonicalPatentId> {
@@ -372,7 +398,10 @@ fn try_iso_generic(s: &str, raw: &str) -> Option<CanonicalPatentId> {
     let cap = ISO_GENERIC_RE.captures(s)?;
     let jur = cap[1].to_string();
     // Exclude already-matched jurisdictions
-    if matches!(jur.as_str(), "US" | "EP" | "WO" | "JP" | "CN" | "KR" | "AU" | "CA" | "NZ" | "BR" | "IN") {
+    if matches!(
+        jur.as_str(),
+        "US" | "EP" | "WO" | "JP" | "CN" | "KR" | "AU" | "CA" | "NZ" | "BR" | "IN"
+    ) {
         return None;
     }
     let number = cap[2].to_string();
@@ -528,8 +557,16 @@ mod tests {
         ];
         for (input, expected_canonical, expected_jur) in cases {
             let r = canonicalize(input);
-            assert_eq!(r.canonical, expected_canonical, "canonical mismatch for {}", input);
-            assert_eq!(r.jurisdiction, expected_jur, "jurisdiction mismatch for {}", input);
+            assert_eq!(
+                r.canonical, expected_canonical,
+                "canonical mismatch for {}",
+                input
+            );
+            assert_eq!(
+                r.jurisdiction, expected_jur,
+                "jurisdiction mismatch for {}",
+                input
+            );
         }
     }
 }

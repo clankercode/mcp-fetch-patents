@@ -5,8 +5,10 @@ Three backends are provided:
 - UsptoTextSearchBackend       — USPTO PPUBS full-text search
 - EpoOpsSearchBackend          — EPO Open Patent Services (OPS)
 """
+
 from __future__ import annotations
 
+import json
 import logging
 import time
 import xml.etree.ElementTree as ET
@@ -24,6 +26,7 @@ log = logging.getLogger(__name__)
 # Helper
 # ---------------------------------------------------------------------------
 
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -31,6 +34,7 @@ def _now_iso() -> str:
 # ---------------------------------------------------------------------------
 # Backend 1: SerpAPI Google Patents
 # ---------------------------------------------------------------------------
+
 
 class SerpApiGooglePatentsBackend:
     """Search Google Patents via SerpAPI's google_patents engine."""
@@ -44,8 +48,8 @@ class SerpApiGooglePatentsBackend:
     async def search(
         self,
         query: str,
-        date_from: str | None = None,    # "YYYY-MM-DD"
-        date_to: str | None = None,      # "YYYY-MM-DD"
+        date_from: str | None = None,  # "YYYY-MM-DD"
+        date_to: str | None = None,  # "YYYY-MM-DD"
         assignee: str | None = None,
         inventor: str | None = None,
         patent_type: str | None = None,  # "PATENT" or "APPLICATION"
@@ -86,6 +90,9 @@ class SerpApiGooglePatentsBackend:
                 exc,
             )
             return []
+        except (json.JSONDecodeError, ValueError) as exc:
+            log.warning("SerpAPI Google Patents JSON decode error: %s", exc)
+            return []
         except Exception as exc:
             log.warning("SerpAPI Google Patents request failed: %s", exc)
             return []
@@ -104,11 +111,7 @@ class SerpApiGooglePatentsBackend:
 
     def _map_result(self, item: dict[str, Any]) -> PatentHit | None:
         """Map a single SerpAPI organic_result entry to a PatentHit."""
-        patent_id = (
-            item.get("patent_id")
-            or item.get("result_id")
-            or item.get("id")
-        )
+        patent_id = item.get("patent_id") or item.get("result_id") or item.get("id")
         if not patent_id:
             return None
 
@@ -143,6 +146,7 @@ class SerpApiGooglePatentsBackend:
 # Backend 2: USPTO PPUBS Text Search
 # ---------------------------------------------------------------------------
 
+
 class UsptoTextSearchBackend:
     """Search USPTO PPUBS full-text search API."""
 
@@ -153,9 +157,9 @@ class UsptoTextSearchBackend:
 
     async def search(
         self,
-        query: str,           # Boolean query like "TTL/wireless AND ACLM/charging"
-        date_from: str | None = None,   # "YYYYMMDD"
-        date_to: str | None = None,     # "YYYYMMDD"
+        query: str,  # Boolean query like "TTL/wireless AND ACLM/charging"
+        date_from: str | None = None,  # "YYYYMMDD"
+        date_to: str | None = None,  # "YYYYMMDD"
         max_results: int = 25,
     ) -> list[PatentHit]:
         """Search USPTO PPUBS full-text search API.
@@ -188,6 +192,9 @@ class UsptoTextSearchBackend:
                 exc,
             )
             return []
+        except (json.JSONDecodeError, ValueError) as exc:
+            log.warning("USPTO PPUBS text search JSON decode error: %s", exc)
+            return []
         except Exception as exc:
             log.warning("USPTO PPUBS text search request failed: %s", exc)
             return []
@@ -207,9 +214,7 @@ class UsptoTextSearchBackend:
     def _map_doc(self, doc: dict[str, Any]) -> PatentHit | None:
         """Map a single PPUBS patent document to a PatentHit."""
         patent_id = (
-            doc.get("patentNumber")
-            or doc.get("patent_number")
-            or doc.get("documentId")
+            doc.get("patentNumber") or doc.get("patent_number") or doc.get("documentId")
         )
         if not patent_id:
             return None
@@ -242,6 +247,7 @@ class UsptoTextSearchBackend:
 # ---------------------------------------------------------------------------
 # Backend 3: EPO OPS Search
 # ---------------------------------------------------------------------------
+
 
 class EpoOpsSearchBackend:
     """Search EPO Open Patent Services (OPS) API."""
@@ -319,7 +325,7 @@ class EpoOpsSearchBackend:
 
     async def search(
         self,
-        query: str,           # CQL query like "ti=wireless AND cl=H02J50"
+        query: str,  # CQL query like "ti=wireless AND cl=H02J50"
         date_from: str | None = None,
         date_to: str | None = None,
         max_results: int = 25,
@@ -365,6 +371,9 @@ class EpoOpsSearchBackend:
                 exc,
             )
             return []
+        except (json.JSONDecodeError, ValueError) as exc:
+            log.warning("EPO OPS search JSON decode error: %s", exc)
+            return []
         except Exception as exc:
             log.warning("EPO OPS search request failed: %s", exc)
             return []
@@ -375,7 +384,7 @@ class EpoOpsSearchBackend:
 
     async def search_by_classification(
         self,
-        cpc_code: str,              # like "H02J50" or "H02J50/10"
+        cpc_code: str,  # like "H02J50" or "H02J50/10"
         include_subclasses: bool = True,
         date_from: str | None = None,
         date_to: str | None = None,
@@ -479,8 +488,7 @@ class EpoOpsSearchBackend:
         try:
             # Navigate the nested EPO OPS JSON structure
             ops_data = (
-                data
-                .get("ops:world-patent-data", data)
+                data.get("ops:world-patent-data", data)
                 .get("ops:biblio-search", data)
                 .get("ops:search-result", {})
             )
@@ -594,7 +602,11 @@ class EpoOpsSearchBackend:
             for c in citation_list:
                 doc_id = c.get("patcit", {}).get("document-id", {})
                 num = doc_id.get("doc-number", {})
-                val = num.get("$") or num.get("#text") if isinstance(num, dict) else str(num)
+                val = (
+                    num.get("$") or num.get("#text")
+                    if isinstance(num, dict)
+                    else str(num)
+                )
                 country = doc_id.get("country", {})
                 cc = country.get("$") if isinstance(country, dict) else str(country)
                 if val:
@@ -622,20 +634,30 @@ class EpoOpsSearchBackend:
                         doc_ids = [doc_ids]
                     for did in doc_ids:
                         country = did.get("country", {})
-                        cc = country.get("$") if isinstance(country, dict) else str(country)
+                        cc = (
+                            country.get("$")
+                            if isinstance(country, dict)
+                            else str(country)
+                        )
                         num = did.get("doc-number", {})
                         n = num.get("$") if isinstance(num, dict) else str(num)
                         kind = did.get("kind", {})
                         k = kind.get("$") if isinstance(kind, dict) else str(kind)
                         date_obj = did.get("date", {})
-                        d = date_obj.get("$") if isinstance(date_obj, dict) else str(date_obj)
+                        d = (
+                            date_obj.get("$")
+                            if isinstance(date_obj, dict)
+                            else str(date_obj)
+                        )
                         if n:
-                            members.append({
-                                "patent_id": f"{cc or ''}{n}{k or ''}",
-                                "country": cc or "",
-                                "doc_type": k or "",
-                                "date": d or "",
-                            })
+                            members.append(
+                                {
+                                    "patent_id": f"{cc or ''}{n}{k or ''}",
+                                    "country": cc or "",
+                                    "doc_type": k or "",
+                                    "date": d or "",
+                                }
+                            )
         except Exception as exc:
             log.warning("EPO OPS family JSON parse error: %s", exc)
         return members
@@ -661,9 +683,7 @@ class EpoOpsSearchBackend:
             log.warning("EPO OPS XML parse error: %s", exc)
         return hits
 
-    def _map_ops_xml_doc(
-        self, doc: ET.Element, ns: dict[str, str]
-    ) -> PatentHit | None:
+    def _map_ops_xml_doc(self, doc: ET.Element, ns: dict[str, str]) -> PatentHit | None:
         """Map a single EPO OPS XML exchange-document element to a PatentHit."""
         country = doc.get("country", "")
         doc_number = doc.get("doc-number", "")
@@ -676,7 +696,9 @@ class EpoOpsSearchBackend:
         title_el = doc.find(".//ep:invention-title[@lang='en']", ns)
         if title_el is None:
             title_el = doc.find(".//ep:invention-title", ns)
-        title = title_el.text.strip() if title_el is not None and title_el.text else None
+        title = (
+            title_el.text.strip() if title_el is not None and title_el.text else None
+        )
 
         # Date
         date_el = doc.find(".//ep:date-of-publication", ns)
@@ -721,7 +743,11 @@ class EpoOpsSearchBackend:
                 country_el = doc.find("ep:country", ns)
                 num_el = doc.find("ep:doc-number", ns)
                 if num_el is not None and num_el.text:
-                    cc = country_el.text.strip() if country_el is not None and country_el.text else ""
+                    cc = (
+                        country_el.text.strip()
+                        if country_el is not None and country_el.text
+                        else ""
+                    )
                     ids.append(f"{cc}{num_el.text.strip()}")
         except ET.ParseError as exc:
             log.warning("EPO OPS citation XML parse error: %s", exc)
@@ -743,16 +769,30 @@ class EpoOpsSearchBackend:
                     kind_el = doc.find("ep:kind", ns)
                     date_el = doc.find("ep:date", ns)
                     if num_el is not None and num_el.text:
-                        cc = country_el.text.strip() if country_el is not None and country_el.text else ""
+                        cc = (
+                            country_el.text.strip()
+                            if country_el is not None and country_el.text
+                            else ""
+                        )
                         num = num_el.text.strip()
-                        kind = kind_el.text.strip() if kind_el is not None and kind_el.text else ""
-                        date = date_el.text.strip() if date_el is not None and date_el.text else ""
-                        members.append({
-                            "patent_id": f"{cc}{num}{kind}",
-                            "country": cc,
-                            "doc_type": kind,
-                            "date": date,
-                        })
+                        kind = (
+                            kind_el.text.strip()
+                            if kind_el is not None and kind_el.text
+                            else ""
+                        )
+                        date = (
+                            date_el.text.strip()
+                            if date_el is not None and date_el.text
+                            else ""
+                        )
+                        members.append(
+                            {
+                                "patent_id": f"{cc}{num}{kind}",
+                                "country": cc,
+                                "doc_type": kind,
+                                "date": date,
+                            }
+                        )
         except ET.ParseError as exc:
             log.warning("EPO OPS family XML parse error: %s", exc)
         return members

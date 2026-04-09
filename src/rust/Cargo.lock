@@ -1364,7 +1364,6 @@ dependencies = [
  "futures",
  "hostname",
  "libc",
- "once_cell",
  "quick-xml",
  "regex",
  "reqwest",

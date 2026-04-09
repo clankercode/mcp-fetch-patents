@@ -1,11 +1,28 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use reqwest::Client;
 use tracing::warn;
 
 use crate::ranking::PatentHit;
+
+fn validate_path_segment(input: &str, label: &str) -> Result<()> {
+    if input.contains('/')
+        || input.contains('\\')
+        || input.contains("..")
+        || input.contains('?')
+        || input.contains('#')
+        || input.chars().any(|c| c.is_whitespace())
+    {
+        return Err(anyhow!(
+            "Invalid {} '{}' contains forbidden characters",
+            label,
+            input
+        ));
+    }
+    Ok(())
+}
 
 pub struct SerpApiGooglePatentsBackend {
     api_key: String,
@@ -350,7 +367,7 @@ impl EpoOpsSearchBackend {
         };
 
         {
-            let state = self.token_state.lock().unwrap();
+            let state = self.token_state.lock().unwrap_or_else(|e| e.into_inner());
             if let (Some(ref token), Some(expires_at)) = (&state.token, state.expires_at) {
                 if Instant::now() < expires_at - Duration::from_secs(60) {
                     return Ok(Some(token.clone()));
@@ -401,7 +418,7 @@ impl EpoOpsSearchBackend {
             .unwrap_or(1800);
 
         if let Some(ref t) = token {
-            let mut state = self.token_state.lock().unwrap();
+            let mut state = self.token_state.lock().unwrap_or_else(|e| e.into_inner());
             state.token = Some(t.clone());
             state.expires_at = Some(Instant::now() + Duration::from_secs(expires_in as u64));
         }
@@ -496,6 +513,7 @@ impl EpoOpsSearchBackend {
         date_to: Option<&str>,
         max_results: usize,
     ) -> Result<Vec<PatentHit>> {
+        validate_path_segment(cpc_code, "classification code")?;
         let code_expr = if include_subclasses {
             format!("cpc={}/*", cpc_code)
         } else {
@@ -510,6 +528,7 @@ impl EpoOpsSearchBackend {
         patent_id: &str,
         direction: &str,
     ) -> Result<Vec<String>> {
+        validate_path_segment(patent_id, "patent_id")?;
         let token = self.get_oauth_token().await.ok().flatten();
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("Accept", "application/json".parse().unwrap());
@@ -582,6 +601,7 @@ impl EpoOpsSearchBackend {
         &self,
         patent_id: &str,
     ) -> Result<Vec<serde_json::Value>> {
+        validate_path_segment(patent_id, "patent_id")?;
         let token = self.get_oauth_token().await.ok().flatten();
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("Accept", "application/json".parse().unwrap());

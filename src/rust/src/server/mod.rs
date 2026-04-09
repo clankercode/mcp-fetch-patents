@@ -435,6 +435,8 @@ async fn build_fetch_patents_payload(
 enum Dispatch {
     /// Respond immediately with this response
     Immediate(RpcResponse),
+    /// Notification — no response should be sent (JSON-RPC spec)
+    Notification,
     /// Needs async tool execution — carry the parsed request
     ToolCall { id: Value, params: Value },
 }
@@ -457,7 +459,7 @@ fn route_line(line: &str) -> Dispatch {
             "capabilities": {"tools": {}},
             "serverInfo": {"name": "patent-mcp-server", "version": "0.1.0"}
         }))),
-        "initialized" => Dispatch::Immediate(RpcResponse::ok(id, Value::Null)),
+        "initialized" => Dispatch::Notification,
         "tools/list" => Dispatch::Immediate(RpcResponse::ok(id, tools_list())),
         "tools/call" => {
             match req.params {
@@ -1348,6 +1350,7 @@ pub async fn run_server(config: PatentConfig) -> Result<()> {
 
         let response = match route_line(&line) {
             Dispatch::Immediate(r) => r,
+            Dispatch::Notification => continue,
             Dispatch::ToolCall { id, params } => {
                 execute_tool_call(id, params, &config, &cache_for_ops, &orchestrator, &journal, &backends).await
             }
@@ -1369,13 +1372,13 @@ pub async fn run_server(config: PatentConfig) -> Result<()> {
 /// Synchronous helper for tests — routes a line (no tool-call async needed for
 /// the test cases that only test initialize / tools/list / empty fetch_patents).
 #[cfg(test)]
-fn handle_line(line: &str, _config: &PatentConfig) -> RpcResponse {
+fn handle_line(line: &str, _config: &PatentConfig) -> Option<RpcResponse> {
     match route_line(line) {
-        Dispatch::Immediate(r) => r,
+        Dispatch::Immediate(r) => Some(r),
+        Dispatch::Notification => None,
         Dispatch::ToolCall { id, params } => {
-            // For sync test use: handle the empty fetch_patents case inline.
             let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            match tool_name.as_str() {
+            Some(match tool_name.as_str() {
                 "fetch_patents" => {
                     let patent_ids = get_str_array_param(&params, "patent_ids").unwrap_or_default();
 
@@ -1416,7 +1419,7 @@ fn handle_line(line: &str, _config: &PatentConfig) -> RpcResponse {
                     }))
                 }
                 _ => RpcResponse::err(id, -32601, &format!("Unknown tool: {}", tool_name)),
-            }
+            })
         }
     }
 }
@@ -1459,17 +1462,24 @@ mod tests {
     fn test_handle_initialize() {
         let line = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#;
         let config = make_config();
-        let resp = handle_line(line, &config);
+        let resp = handle_line(line, &config).unwrap();
         assert!(resp.result.is_some());
         let r = resp.result.unwrap();
         assert_eq!(r["protocolVersion"], "2024-11-05");
     }
 
     #[test]
+    fn test_initialized_notification_no_response() {
+        let line = r#"{"jsonrpc":"2.0","method":"initialized"}"#;
+        let config = make_config();
+        assert!(handle_line(line, &config).is_none());
+    }
+
+    #[test]
     fn test_handle_tools_list() {
         let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
         let config = make_config();
-        let resp = handle_line(line, &config);
+        let resp = handle_line(line, &config).unwrap();
         assert!(resp.result.is_some());
         let r = resp.result.unwrap();
         assert!(r["tools"].is_array());
@@ -1506,7 +1516,7 @@ mod tests {
     fn test_empty_fetch_patents() {
         let line = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"fetch_patents","arguments":{"patent_ids":[]}}}"#;
         let config = make_config();
-        let resp = handle_line(line, &config);
+        let resp = handle_line(line, &config).unwrap();
         assert!(resp.result.is_some());
     }
 
@@ -1535,7 +1545,7 @@ mod tests {
     fn test_unknown_method_returns_error() {
         let line = r#"{"jsonrpc":"2.0","id":4,"method":"unknown/method","params":{}}"#;
         let config = make_config();
-        let resp = handle_line(line, &config);
+        let resp = handle_line(line, &config).unwrap();
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, -32601);
     }
@@ -1544,11 +1554,11 @@ mod tests {
     fn test_session_create_and_list() {
         let config = make_config();
         let create_line = r#"{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"patent_session_create","arguments":{"topic":"test topic","notes":"integration test"}}}"#;
-        let resp = handle_line(create_line, &config);
+        let resp = handle_line(create_line, &config).unwrap();
         assert!(resp.result.is_some());
 
         let list_line = r#"{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"patent_session_list","arguments":{}}}"#;
-        let resp = handle_line(list_line, &config);
+        let resp = handle_line(list_line, &config).unwrap();
         assert!(resp.result.is_some());
     }
 
@@ -1556,7 +1566,7 @@ mod tests {
     fn test_search_tools_registered() {
         let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}"#;
         let config = make_config();
-        let resp = handle_line(line, &config);
+        let resp = handle_line(line, &config).unwrap();
         let r = resp.result.unwrap();
         let tools = r["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter()
@@ -1578,7 +1588,7 @@ mod tests {
     fn parity_tools_have_input_schema() {
         let config = make_config();
         let line = r#"{"jsonrpc":"2.0","id":30,"method":"tools/list","params":{}}"#;
-        let resp = handle_line(line, &config);
+        let resp = handle_line(line, &config).unwrap();
         let tools = resp.result.unwrap()["tools"].as_array().unwrap().clone();
 
         for tool in tools {

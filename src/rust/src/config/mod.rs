@@ -279,7 +279,11 @@ pub fn load_config() -> Result<PatentConfig> {
         }
         if let Some(s) = file.search {
             if let Some(v) = s.browser_profiles_dir {
-                cfg.search_browser_profiles_dir = if v.is_empty() { None } else { Some(PathBuf::from(v)) };
+                cfg.search_browser_profiles_dir = if v.is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(v))
+                };
             }
             if let Some(v) = s.browser_default_profile {
                 cfg.search_browser_default_profile = v;
@@ -297,7 +301,11 @@ pub fn load_config() -> Result<PatentConfig> {
                 cfg.search_browser_idle_timeout = v;
             }
             if let Some(v) = s.browser_debug_html_dir {
-                cfg.search_browser_debug_html_dir = if v.is_empty() { None } else { Some(PathBuf::from(v)) };
+                cfg.search_browser_debug_html_dir = if v.is_empty() {
+                    None
+                } else {
+                    Some(PathBuf::from(v))
+                };
             }
             if let Some(v) = s.backend_default {
                 cfg.search_backend_default = v;
@@ -377,13 +385,19 @@ pub fn load_config() -> Result<PatentConfig> {
         cfg.search_browser_headless = parse_bool_env(&v);
     }
     if let Ok(v) = std::env::var("PATENT_SEARCH_BROWSER_TIMEOUT") {
-        if let Ok(t) = v.parse::<f64>() { cfg.search_browser_timeout = t; }
+        if let Ok(t) = v.parse::<f64>() {
+            cfg.search_browser_timeout = t;
+        }
     }
     if let Ok(v) = std::env::var("PATENT_SEARCH_BROWSER_MAX_PAGES") {
-        if let Ok(n) = v.parse::<usize>() { cfg.search_browser_max_pages = n; }
+        if let Ok(n) = v.parse::<usize>() {
+            cfg.search_browser_max_pages = n;
+        }
     }
     if let Ok(v) = std::env::var("PATENT_SEARCH_BROWSER_IDLE_TIMEOUT") {
-        if let Ok(t) = v.parse::<f64>() { cfg.search_browser_idle_timeout = t; }
+        if let Ok(t) = v.parse::<f64>() {
+            cfg.search_browser_idle_timeout = t;
+        }
     }
     if let Ok(v) = std::env::var("PATENT_SEARCH_BROWSER_DEBUG_HTML_DIR") {
         cfg.search_browser_debug_html_dir = Some(PathBuf::from(v));
@@ -392,7 +406,9 @@ pub fn load_config() -> Result<PatentConfig> {
         cfg.search_backend_default = v;
     }
     if let Ok(v) = std::env::var("PATENT_SEARCH_ENRICH_TOP_N") {
-        if let Ok(n) = v.parse::<usize>() { cfg.search_enrich_top_n = n; }
+        if let Ok(n) = v.parse::<usize>() {
+            cfg.search_enrich_top_n = n;
+        }
     }
 
     Ok(cfg)
@@ -401,11 +417,10 @@ pub fn load_config() -> Result<PatentConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use once_cell::sync::Lazy;
-    use std::sync::{Mutex, MutexGuard};
+    use std::sync::{LazyLock, Mutex, MutexGuard};
     use tempfile::TempDir;
 
-    static CONFIG_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+    static CONFIG_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     struct TestEnvGuard {
         _lock: MutexGuard<'static, ()>,
@@ -483,7 +498,10 @@ mod tests {
             search_backend_default: "browser".into(),
             search_enrich_top_n: 5,
         };
-        assert_eq!(cfg.cache_local_dir, xdg_data_home().join("patent-cache").join("patents"));
+        assert_eq!(
+            cfg.cache_local_dir,
+            xdg_data_home().join("patent-cache").join("patents")
+        );
         assert_eq!(cfg.concurrency, 10);
         assert!(cfg.fetch_all_sources);
         assert_eq!(cfg.timeout_secs, 30.0);

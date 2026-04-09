@@ -5,6 +5,7 @@ local-storage, and login state survive across search calls. A background thread
 monitors idle time and closes the browser after the configured timeout (default
 30 minutes).
 """
+
 from __future__ import annotations
 
 import atexit
@@ -57,7 +58,8 @@ class BrowserManager:
         self._context: Any = None
         self._last_used: float = 0.0
 
-        # Idle-timer thread
+        self._atexit_registered = False
+
         self._idle_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
@@ -139,10 +141,14 @@ class BrowserManager:
             self._context.set_default_navigation_timeout(self._nav_timeout)
             self._last_used = time.monotonic()
             self._start_idle_timer()
-            atexit.register(self.close)
+            if not self._atexit_registered:
+                atexit.register(self.close)
+                self._atexit_registered = True
             log.info(
                 "Browser started (profile=%s, headless=%s, idle_timeout=%ds)",
-                self._profile_name, self._headless, int(self._idle_timeout),
+                self._profile_name,
+                self._headless,
+                int(self._idle_timeout),
             )
         except Exception:
             # Clean up on failure
@@ -190,7 +196,9 @@ class BrowserManager:
         if self._idle_thread and self._idle_thread.is_alive():
             return
         self._idle_thread = threading.Thread(
-            target=self._idle_loop, daemon=True, name="browser-idle-timer",
+            target=self._idle_loop,
+            daemon=True,
+            name="browser-idle-timer",
         )
         self._idle_thread.start()
 
@@ -208,7 +216,8 @@ class BrowserManager:
                 if idle_secs >= self._idle_timeout:
                     log.info(
                         "Browser idle for %ds — shutting down (profile=%s)",
-                        int(idle_secs), self._profile_name,
+                        int(idle_secs),
+                        self._profile_name,
                     )
                     self._close_internal()
                     return

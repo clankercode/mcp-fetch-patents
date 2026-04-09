@@ -6,15 +6,15 @@
 //! This module mirrors the Python implementation at
 //! `src/python/patent_mcp/search/planner.py` exactly.
 
-use once_cell::sync::Lazy;
 use regex::Regex;
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 // ---------------------------------------------------------------------------
 // Stop words — filtered out during concept extraction
 // ---------------------------------------------------------------------------
 
-static STOP_WORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
+static STOP_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
     let mut s = HashSet::new();
     for w in &[
         "a",
@@ -176,7 +176,7 @@ static STOP_WORDS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
 // Synonym table — phrase/term → list of alternatives for patent language
 // ---------------------------------------------------------------------------
 
-static SYNONYMS: Lazy<HashMap<&'static str, Vec<&'static str>>> = Lazy::new(|| {
+static SYNONYMS: LazyLock<HashMap<&'static str, Vec<&'static str>>> = LazyLock::new(|| {
     let mut m = HashMap::new();
 
     // Power / Energy
@@ -581,15 +581,40 @@ static SYNONYMS: Lazy<HashMap<&'static str, Vec<&'static str>>> = Lazy::new(|| {
 });
 
 /// Pre-sorted synonym keys (longest first) for deterministic multi-word matching.
-static SYNONYMS_SORTED: Lazy<Vec<&'static str>> = Lazy::new(|| {
+static SYNONYMS_SORTED: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
     let mut keys: Vec<&'static str> = SYNONYMS.keys().copied().collect();
     keys.sort_by_key(|k| std::cmp::Reverse(k.len()));
     keys
 });
 
+/// Pre-compiled regexes for multi-word synonym phrases (longest first).
+static MULTI_WORD_PHRASE_RES: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
+    SYNONYMS_SORTED
+        .iter()
+        .filter(|phrase| phrase.contains(' '))
+        .filter_map(|&phrase| {
+            let pattern = format!(r"\b{}\b", regex::escape(phrase));
+            Regex::new(&pattern).ok().map(|re| (phrase, re))
+        })
+        .collect()
+});
+
+/// Pre-compiled regexes for single-word synonym keys.
+static SINGLE_WORD_KEY_RES: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
+    SYNONYMS
+        .keys()
+        .filter(|key| !key.contains(' '))
+        .filter_map(|&key| {
+            let pattern = format!(r"\b{}\b", regex::escape(key));
+            Regex::new(&pattern).ok().map(|re| (key, re))
+        })
+        .collect()
+});
+
 /// Regex for extracting single-word tokens from lowercased text.
 /// Allows leading digits to catch terms like "5g".
-static WORD_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b[a-z0-9][a-z0-9-]*[a-z0-9]\b").unwrap());
+static WORD_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b[a-z0-9][a-z0-9-]*[a-z0-9]\b").unwrap());
 
 // ---------------------------------------------------------------------------
 // Data model
@@ -670,16 +695,10 @@ impl NaturalLanguagePlanner {
         // Match multi-word phrases from synonym table (longest first)
         // Use \b word boundaries to avoid false positives like
         // "non-electric vehicle" matching "electric vehicle"
-        for phrase in SYNONYMS_SORTED.iter() {
-            if !phrase.contains(' ') {
-                continue;
-            }
-            let pattern = format!(r"\b{}\b", regex::escape(phrase));
-            if let Ok(re) = Regex::new(&pattern) {
-                if re.is_match(&text) {
-                    found_phrases.push(phrase.to_string());
-                    text = re.replace(&text, " _ ").to_string();
-                }
+        for &(phrase, ref re) in MULTI_WORD_PHRASE_RES.iter() {
+            if re.is_match(&text) {
+                found_phrases.push(phrase.to_string());
+                text = re.replace(&text, " _ ").to_string();
             }
         }
 
@@ -696,15 +715,9 @@ impl NaturalLanguagePlanner {
 
         // Also check single-word synonym keys against the original text
         // (catches terms like "5g" that the tokenizer might miss)
-        for key in SYNONYMS.keys() {
-            if key.contains(' ') {
-                continue;
-            }
-            let pattern = format!(r"\b{}\b", regex::escape(key));
-            if let Ok(re) = Regex::new(&pattern) {
-                if re.is_match(&lower_desc) && !found_phrases.contains(&key.to_string()) {
-                    single_words.push(key.to_string());
-                }
+        for &(key, ref re) in SINGLE_WORD_KEY_RES.iter() {
+            if re.is_match(&lower_desc) && !found_phrases.contains(&key.to_string()) {
+                single_words.push(key.to_string());
             }
         }
 
