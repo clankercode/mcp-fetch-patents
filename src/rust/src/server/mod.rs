@@ -147,7 +147,7 @@ fn tools_list() -> Value {
                         "session_id": {"type": "string", "description": "Optional session ID to save results."},
                         "max_results": {"type": "integer", "default": 25, "description": "Maximum results after ranking."},
                         "backend": {"type": "string", "default": "auto", "description": "Search backend: \"browser\", \"serpapi\", or \"auto\"."},
-                        "enrich_top_n": {"type": "integer", "description": "Enrich top N results with full metadata. Default from config."},
+                        "enrich_top_n": {"type": "integer", "description": "Reserved for future use: enrich top N results with full metadata. Currently returns empty enriched_ids."},
                         "debug": {"type": "boolean", "default": false}
                     },
                     "required": ["description"]
@@ -177,7 +177,7 @@ fn tools_list() -> Value {
                     "properties": {
                         "patent_id": {"type": "string", "description": "Seed patent ID."},
                         "direction": {"type": "string", "default": "backward", "description": "\"backward\", \"forward\", or \"both\"."},
-                        "depth": {"type": "integer", "default": 1, "description": "Citation depth (1-3)."},
+                        "depth": {"type": "integer", "default": 1, "description": "Citation depth (1-2). Depth 2 follows citations of citations."},
                         "session_id": {"type": "string"}
                     },
                     "required": ["patent_id"]
@@ -836,10 +836,18 @@ async fn execute_tool_call(
                 citations.insert(dir_.to_string(), entry);
             }
 
+            let citations_snapshot = citations.clone();
+            let patent_id_for_session = patent_id.clone();
+
             if let Some(ref sid) = session_id {
                 let sm = crate::search::session_manager::SessionManager::new(None);
                 if let Ok(mut session) = sm.load_session(sid) {
-                    session.citation_chains = serde_json::json!(citations);
+                    let map = session.citation_chains.as_object_mut();
+                    if let Some(map) = map {
+                        map.insert(patent_id_for_session.clone(), serde_json::json!(citations_snapshot));
+                    } else {
+                        session.citation_chains = serde_json::json!({patent_id_for_session: citations_snapshot});
+                    }
                     let _ = sm.save_session(&session);
                 }
             }

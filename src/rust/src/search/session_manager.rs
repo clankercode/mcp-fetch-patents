@@ -93,6 +93,16 @@ fn now_iso() -> String {
     Utc::now().to_rfc3339()
 }
 
+fn validate_session_id(id: &str) -> Result<()> {
+    if id.is_empty() {
+        anyhow::bail!("Session ID cannot be empty");
+    }
+    if id.contains('/') || id.contains('\\') || id.contains("..") || id.contains('\0') {
+        anyhow::bail!("Invalid session ID: {:?}", id);
+    }
+    Ok(())
+}
+
 fn make_slug(topic: &str) -> String {
     let slug = topic.to_lowercase().replace(' ', "-");
     let slug: String = slug
@@ -165,7 +175,13 @@ impl SessionManager {
     }
 
     pub fn load_session(&self, session_id: &str) -> Result<Session> {
+        validate_session_id(session_id)?;
         let path = self.dir.join(format!("{}.json", session_id));
+        let canonical_dir = self.dir.canonicalize().unwrap_or_else(|_| self.dir.clone());
+        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.clone());
+        if !canonical_path.starts_with(&canonical_dir) {
+            anyhow::bail!("Session ID escapes sessions directory: {}", session_id);
+        }
         if !path.exists() {
             anyhow::bail!("Session not found: {}", session_id);
         }
@@ -969,5 +985,15 @@ mod tests {
         let mgr = SessionManager::new(None);
         assert_eq!(mgr.sessions_dir(), tmp.path());
         std::env::remove_var("PATENT_SESSIONS_DIR");
+    }
+
+    #[test]
+    fn session_id_rejects_path_traversal() {
+        let (_tmp, mgr) = make_manager();
+        assert!(mgr.load_session("../../etc/passwd").is_err());
+        assert!(mgr.load_session("foo/bar").is_err());
+        assert!(mgr.load_session("foo\\bar").is_err());
+        assert!(mgr.load_session("..").is_err());
+        assert!(mgr.load_session("").is_err());
     }
 }
