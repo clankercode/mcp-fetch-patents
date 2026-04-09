@@ -260,7 +260,16 @@ impl FetcherOrchestrator {
             );
             let ws_result =
                 web_search::WebSearchFallbackSource::fetch(patent, output_dir, &self.config).await;
-            all_attempts.push(ws_result.source_attempt);
+            all_attempts.push(ws_result.source_attempt.clone());
+            if ws_result.source_attempt.success {
+                if let Some(p) = ws_result.pdf_path {
+                    all_pdfs.push(p);
+                }
+                if let Some(p) = ws_result.txt_path {
+                    all_txts.push(p);
+                }
+                merge_metadata(&mut best_metadata, ws_result.metadata);
+            }
         }
 
         // Convert PDF to markdown if we got a PDF
@@ -308,7 +317,7 @@ impl FetcherOrchestrator {
 
         OrchestratorResult {
             canonical_id: patent.canonical.clone(),
-            success: any_success || !files.is_empty(),
+            success: updated_any_success || !files.is_empty(),
             cache_dir: if !files.is_empty() {
                 Some(output_dir.to_path_buf())
             } else {
@@ -662,5 +671,29 @@ mod tests {
         assert_eq!(metadata.assignee.as_deref(), Some("Patent Corp"));
         assert_eq!(metadata.filing_date.as_deref(), Some("2020-01-01"));
         assert_eq!(metadata.publication_date.as_deref(), Some("2021-01-01"));
+    }
+
+    #[tokio::test]
+    async fn test_success_reflects_web_search_fallback_result() {
+        let tmp = TempDir::new().unwrap();
+        let mut cfg = make_config(&tmp);
+        cfg.source_priority = vec![];
+        cfg.source_base_urls.insert(
+            "DDG".into(),
+            "http://127.0.0.1:9/unreachable-duckduckgo".into(),
+        );
+        let cache = PatentCache::new(&cfg).unwrap();
+
+        let orch = FetcherOrchestrator {
+            config: cfg,
+            cache,
+            sources: vec![],
+        };
+
+        let patent = crate::id_canon::canonicalize("US10000000");
+        let result = orch.fetch_force_refresh(&patent, tmp.path()).await;
+
+        assert!(result.success);
+        assert!(result.sources.iter().any(|source| source.source == "web_search" && source.success));
     }
 }
