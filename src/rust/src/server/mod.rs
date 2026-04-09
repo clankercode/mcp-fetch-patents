@@ -471,6 +471,13 @@ fn route_line(line: &str) -> Dispatch {
 // Async tool execution
 // ---------------------------------------------------------------------------
 
+struct SearchBackends {
+    serpapi: Option<crate::search::searchers::SerpApiGooglePatentsBackend>,
+    uspto: crate::search::searchers::UsptoTextSearchBackend,
+    epo: crate::search::searchers::EpoOpsSearchBackend,
+    session_manager: crate::search::session_manager::SessionManager,
+}
+
 async fn execute_tool_call(
     id: Value,
     params: Value,
@@ -478,6 +485,7 @@ async fn execute_tool_call(
     cache: &crate::cache::PatentCache,
     orchestrator: &crate::fetchers::FetcherOrchestrator,
     journal: &crate::journal::ActivityJournal,
+    backends: &SearchBackends,
 ) -> RpcResponse {
     let tool_name = match params.get("name").and_then(|v| v.as_str()) {
         Some(n) => n.to_string(),
@@ -589,8 +597,7 @@ async fn execute_tool_call(
             };
 
             if effective_backend == "serpapi" || effective_backend == "browser" {
-                if let Some(ref key) = config.serpapi_key {
-                    let serp = crate::search::searchers::SerpApiGooglePatentsBackend::new(key.clone(), None);
+                if let Some(ref serp) = backends.serpapi {
                     for variant in &intent.query_variants {
                         let hits = serp
                             .search(
@@ -622,31 +629,33 @@ async fn execute_tool_call(
 
             let mut enriched_ids: Vec<String> = Vec::new();
             if enrich_top_n > 0 && !scored.is_empty() {
-                let to_enrich: Vec<crate::id_canon::CanonicalPatentId> = scored.iter()
+                let scored_canonical: Vec<(usize, crate::id_canon::CanonicalPatentId)> = scored.iter()
                     .take(enrich_top_n)
-                    .filter_map(|s| {
+                    .enumerate()
+                    .filter_map(|(i, s)| {
                         let cid = crate::id_canon::canonicalize(&s.hit.patent_id);
-                        if cid.canonical.is_empty() { None } else { Some(cid) }
+                        if cid.canonical.is_empty() { None } else { Some((i, cid)) }
                     })
                     .collect();
-                if !to_enrich.is_empty() {
+                if !scored_canonical.is_empty() {
+                    let patent_ids: Vec<crate::id_canon::CanonicalPatentId> = scored_canonical.iter().map(|(_, cid)| cid.clone()).collect();
                     let output_base = &config.cache_local_dir;
-                    let results = orchestrator.fetch_batch(&to_enrich, output_base).await;
+                    let results = orchestrator.fetch_batch(&patent_ids, output_base).await;
                     let result_map: std::collections::HashMap<String, &crate::fetchers::OrchestratorResult> = results
                         .iter()
                         .filter(|r| r.success && r.metadata.is_some())
                         .map(|r| (r.canonical_id.clone(), r))
                         .collect();
-                    for s in scored.iter_mut().take(enrich_top_n) {
-                        let cid = crate::id_canon::canonicalize(&s.hit.patent_id);
+                    for (i, cid) in &scored_canonical {
                         if let Some(result) = result_map.get(&cid.canonical) {
                             if let Some(ref meta) = result.metadata {
+                                let s = &mut scored[*i];
                                 if s.hit.title.is_none() { s.hit.title = meta.title.clone(); }
                                 if s.hit.abstract_text.is_none() { s.hit.abstract_text = meta.abstract_text.clone(); }
                                 if s.hit.assignee.is_none() { s.hit.assignee = meta.assignee.clone(); }
                                 if s.hit.inventors.is_empty() && !meta.inventors.is_empty() { s.hit.inventors = meta.inventors.clone(); }
                                 if s.hit.date.is_none() { s.hit.date = meta.publication_date.clone(); }
-                                enriched_ids.push(cid.canonical);
+                                enriched_ids.push(cid.canonical.clone());
                             }
                         }
                     }
@@ -657,14 +666,14 @@ async fn execute_tool_call(
 
             if let Some(ref sid) = session_id {
                 if !all_hits.is_empty() {
-                    let sm = crate::search::session_manager::SessionManager::new(None);
-                    let session_hits: Vec<crate::search::session_manager::PatentHit> = all_hits
-                        .iter()
-                        .map(|h| (**h).clone().into())
-                        .collect();
-                    if let Ok(session) = sm.load_session(sid) {
+                    let sm = &backends.session_manager;
+                    if let Ok(mut session) = sm.load_session(sid) {
                         let now = chrono::Utc::now().to_rfc3339();
                         let query_num = session.queries.len() + 1;
+                        let session_hits: Vec<crate::search::session_manager::PatentHit> = all_hits
+                            .iter()
+                            .map(|h| (**h).clone().into())
+                            .collect();
                         let record = crate::search::session_manager::QueryRecord {
                             query_id: format!("q{:03}", query_num),
                             timestamp: now,
@@ -677,7 +686,8 @@ async fn execute_tool_call(
                                 "planner_concepts": intent.concepts,
                             })),
                         };
-                        let _ = sm.append_query_result(sid, record);
+                        session.queries.push(record);
+                        let _ = sm.save_session(&mut session);
                     }
                 }
             }
@@ -725,58 +735,43 @@ async fn execute_tool_call(
             let session_id = get_str_param(&params, "session_id");
             let max_results = get_int_param(&params, "max_results").unwrap_or(25) as usize;
 
+            let want_uspto = sources.iter().any(|s| s == "USPTO");
+            let want_epo = sources.iter().any(|s| s == "EPO_OPS");
+            let want_google = sources.iter().any(|s| s == "Google_Patents") && config.serpapi_key.is_some();
+
+            let (uspto_result, epo_result, google_result) = tokio::join!(
+                async {
+                    if !want_uspto { return (vec![], None); }
+                    let df = date_from.as_deref().map(|s| s.replace("-", ""));
+                    let dt = date_to.as_deref().map(|s| s.replace("-", ""));
+                    let hits = backends.uspto.search(&query, df.as_deref(), dt.as_deref(), max_results).await.unwrap_or_default();
+                    let qr = Some(serde_json::json!({"source": "USPTO", "query": query, "result_count": hits.len()}));
+                    (hits, qr)
+                },
+                async {
+                    if !want_epo { return (vec![], None); }
+                    let hits = backends.epo.search(&query, date_from.as_deref(), date_to.as_deref(), max_results).await.unwrap_or_default();
+                    let qr = Some(serde_json::json!({"source": "EPO_OPS", "query": query, "result_count": hits.len()}));
+                    (hits, qr)
+                },
+                async {
+                    if !want_google { return (vec![], None); }
+                    let serp = match backends.serpapi.as_ref() {
+                        Some(s) => s,
+                        None => return (vec![], None),
+                    };
+                    let hits = serp.search(&query, date_from.as_deref(), date_to.as_deref(), None, None, None, max_results).await.unwrap_or_default();
+                    let qr = Some(serde_json::json!({"source": "Google_Patents", "query": query, "result_count": hits.len()}));
+                    (hits, qr)
+                },
+            );
+
             let mut all_results: Vec<crate::ranking::PatentHit> = Vec::new();
             let mut queries_run: Vec<Value> = Vec::new();
 
-            if sources.contains(&"USPTO".to_string()) {
-                let uspto = crate::search::searchers::UsptoTextSearchBackend::new(None);
-                let df = date_from.as_deref().map(|s| s.replace("-", ""));
-                let dt = date_to.as_deref().map(|s| s.replace("-", ""));
-                let hits = uspto
-                    .search(&query, df.as_deref(), dt.as_deref(), max_results)
-                    .await
-                    .unwrap_or_default();
-                queries_run.push(serde_json::json!({
-                    "source": "USPTO",
-                    "query": query,
-                    "result_count": hits.len(),
-                }));
-                all_results.extend(hits);
-            }
-
-            if sources.contains(&"EPO_OPS".to_string()) {
-                let epo = crate::search::searchers::EpoOpsSearchBackend::new(
-                    config.epo_client_id.clone(),
-                    config.epo_client_secret.clone(),
-                    None,
-                );
-                let hits = epo
-                    .search(&query, date_from.as_deref(), date_to.as_deref(), max_results)
-                    .await
-                    .unwrap_or_default();
-                queries_run.push(serde_json::json!({
-                    "source": "EPO_OPS",
-                    "query": query,
-                    "result_count": hits.len(),
-                }));
-                all_results.extend(hits);
-            }
-
-            if sources.contains(&"Google_Patents".to_string()) {
-                if let Some(ref key) = config.serpapi_key {
-                    let serp = crate::search::searchers::SerpApiGooglePatentsBackend::new(key.clone(), None);
-                    let hits = serp
-                        .search(&query, date_from.as_deref(), date_to.as_deref(), None, None, None, max_results)
-                        .await
-                        .unwrap_or_default();
-                    queries_run.push(serde_json::json!({
-                        "source": "Google_Patents",
-                        "query": query,
-                        "result_count": hits.len(),
-                    }));
-                    all_results.extend(hits);
-                }
-            }
+            if let Some(qr) = uspto_result.1 { queries_run.push(qr); all_results.extend(uspto_result.0); }
+            if let Some(qr) = epo_result.1 { queries_run.push(qr); all_results.extend(epo_result.0); }
+            if let Some(qr) = google_result.1 { queries_run.push(qr); all_results.extend(google_result.0); }
 
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
             let deduped: Vec<&crate::ranking::PatentHit> = all_results
@@ -786,8 +781,8 @@ async fn execute_tool_call(
 
             if let Some(ref sid) = session_id {
                 if !deduped.is_empty() {
-                    let sm = crate::search::session_manager::SessionManager::new(None);
-                    if let Ok(session) = sm.load_session(sid) {
+                    let sm = &backends.session_manager;
+                    if let Ok(mut session) = sm.load_session(sid) {
                         let now = chrono::Utc::now().to_rfc3339();
                         let query_num = session.queries.len() + 1;
                         let session_hits: Vec<crate::search::session_manager::PatentHit> = deduped.iter().map(|h| (*h).clone().into()).collect();
@@ -802,7 +797,8 @@ async fn execute_tool_call(
                                 "sources": sources,
                             })),
                         };
-                        let _ = sm.append_query_result(sid, record);
+                        session.queries.push(record);
+                        let _ = sm.save_session(&mut session);
                     }
                 }
             }
@@ -836,11 +832,7 @@ async fn execute_tool_call(
             let depth = get_int_param(&params, "depth").unwrap_or(1) as i32;
             let session_id = get_str_param(&params, "session_id");
 
-            let epo = crate::search::searchers::EpoOpsSearchBackend::new(
-                config.epo_client_id.clone(),
-                config.epo_client_secret.clone(),
-                None,
-            );
+            let epo = &backends.epo;
 
             let mut citations: serde_json::Map<String, Value> = serde_json::Map::new();
             let directions: Vec<&str> = if direction == "both" {
@@ -874,7 +866,7 @@ async fn execute_tool_call(
             let patent_id_for_session = patent_id.clone();
 
             if let Some(ref sid) = session_id {
-                let sm = crate::search::session_manager::SessionManager::new(None);
+                let sm = &backends.session_manager;
                 if let Ok(mut session) = sm.load_session(sid) {
                     let map = session.citation_chains.as_object_mut();
                     if let Some(map) = map {
@@ -882,7 +874,7 @@ async fn execute_tool_call(
                     } else {
                         session.citation_chains = serde_json::json!({patent_id_for_session: citations_snapshot});
                     }
-                    let _ = sm.save_session(&session);
+                    let _ = sm.save_session(&mut session);
                 }
             }
 
@@ -906,11 +898,7 @@ async fn execute_tool_call(
             let session_id = get_str_param(&params, "session_id");
             let max_results = get_int_param(&params, "max_results").unwrap_or(25) as usize;
 
-            let epo = crate::search::searchers::EpoOpsSearchBackend::new(
-                config.epo_client_id.clone(),
-                config.epo_client_secret.clone(),
-                None,
-            );
+            let epo = &backends.epo;
             let hits = epo
                 .search_by_classification(&code, include_subclasses, date_from.as_deref(), date_to.as_deref(), max_results)
                 .await
@@ -918,7 +906,7 @@ async fn execute_tool_call(
 
             if let Some(ref sid) = session_id {
                 if !hits.is_empty() {
-                    let sm = crate::search::session_manager::SessionManager::new(None);
+                    let sm = &backends.session_manager;
                     if let Ok(mut session) = sm.load_session(sid) {
                         let now = chrono::Utc::now().to_rfc3339();
                         let query_num = session.queries.len() + 1;
@@ -939,7 +927,7 @@ async fn execute_tool_call(
                         if !session.classifications_explored.contains(&code) {
                             session.classifications_explored.push(code.clone());
                         }
-                        let _ = sm.save_session(&session);
+                        let _ = sm.save_session(&mut session);
                     }
                 }
             }
@@ -967,22 +955,18 @@ async fn execute_tool_call(
             let patent_id = get_str_param(&params, "patent_id").unwrap_or_default();
             let session_id = get_str_param(&params, "session_id");
 
-            let epo = crate::search::searchers::EpoOpsSearchBackend::new(
-                config.epo_client_id.clone(),
-                config.epo_client_secret.clone(),
-                None,
-            );
+            let epo = &backends.epo;
             let members = epo.get_family(&patent_id).await.unwrap_or_default();
 
             if let Some(ref sid) = session_id {
                 if !members.is_empty() {
-                    let sm = crate::search::session_manager::SessionManager::new(None);
+                    let sm = &backends.session_manager;
                     if let Ok(mut session) = sm.load_session(sid) {
                         session.patent_families.insert(
                             patent_id.clone(),
                             members.iter().filter_map(|m| m.get("patent_id").and_then(|v| v.as_str()).map(String::from)).collect(),
                         );
-                        let _ = sm.save_session(&session);
+                        let _ = sm.save_session(&mut session);
                     }
                 }
             }
@@ -1058,7 +1042,7 @@ async fn execute_tool_call(
             let prior_art_cutoff = get_str_param(&params, "prior_art_cutoff");
             let notes = get_str_param(&params, "notes").unwrap_or_default();
 
-            let sm = crate::search::session_manager::SessionManager::new(None);
+            let sm = &backends.session_manager;
             match sm.create_session(&topic, prior_art_cutoff.as_deref(), &notes) {
                 Ok(session) => {
                     let payload = serde_json::json!({
@@ -1079,7 +1063,7 @@ async fn execute_tool_call(
         "patent_session_load" => {
             let session_id = get_str_param(&params, "session_id").unwrap_or_default();
 
-            let sm = crate::search::session_manager::SessionManager::new(None);
+            let sm = &backends.session_manager;
             match sm.load_session(&session_id) {
                 Ok(session) => {
                     let payload = serde_json::to_value(&session).unwrap_or(Value::Null);
@@ -1095,7 +1079,7 @@ async fn execute_tool_call(
         "patent_session_list" => {
             let limit = get_int_param(&params, "limit").map(|n| n as usize);
 
-            let sm = crate::search::session_manager::SessionManager::new(None);
+            let sm = &backends.session_manager;
             let summaries = sm.list_sessions(limit).unwrap_or_default();
             let payload = serde_json::json!({
                 "sessions": summaries,
@@ -1110,7 +1094,7 @@ async fn execute_tool_call(
             let session_id = get_str_param(&params, "session_id").unwrap_or_default();
             let note = get_str_param(&params, "note").unwrap_or_default();
 
-            let sm = crate::search::session_manager::SessionManager::new(None);
+            let sm = &backends.session_manager;
             match sm.add_note(&session_id, &note) {
                 Ok(()) => {
                     let payload = serde_json::json!({"status": "note added", "session_id": session_id});
@@ -1128,7 +1112,7 @@ async fn execute_tool_call(
             let annotation = get_str_param(&params, "annotation").unwrap_or_default();
             let relevance = get_str_param(&params, "relevance").unwrap_or_else(|| "unknown".to_string());
 
-            let sm = crate::search::session_manager::SessionManager::new(None);
+            let sm = &backends.session_manager;
             match sm.annotate_patent(&session_id, &patent_id, &annotation, &relevance) {
                 Ok(()) => {
                     let payload = serde_json::json!({
@@ -1149,7 +1133,7 @@ async fn execute_tool_call(
             let session_id = get_str_param(&params, "session_id").unwrap_or_default();
             let output_path = get_str_param(&params, "output_path").map(std::path::PathBuf::from);
 
-            let sm = crate::search::session_manager::SessionManager::new(None);
+            let sm = &backends.session_manager;
             match sm.export_markdown(&session_id, output_path.as_deref()) {
                 Ok(path) => {
                     let payload = serde_json::json!({
@@ -1208,8 +1192,20 @@ pub async fn run_server(config: PatentConfig) -> Result<()> {
 
     tracing::info!("patent-mcp-server started (Rust implementation)");
 
-    // Read lines from stdin one at a time using a blocking reader on a separate thread,
-    // sending them through a channel so the async runtime can process them.
+    let backends = SearchBackends {
+        serpapi: config.serpapi_key.as_ref().map(|key| {
+            crate::search::searchers::SerpApiGooglePatentsBackend::new(key.clone(), None, None)
+        }),
+        uspto: crate::search::searchers::UsptoTextSearchBackend::new(None, None),
+        epo: crate::search::searchers::EpoOpsSearchBackend::new(
+            config.epo_client_id.clone(),
+            config.epo_client_secret.clone(),
+            None,
+            None,
+        ),
+        session_manager: crate::search::session_manager::SessionManager::new(None),
+    };
+
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     std::thread::spawn(move || {
         use std::io::BufRead;
@@ -1230,7 +1226,7 @@ pub async fn run_server(config: PatentConfig) -> Result<()> {
         let response = match route_line(&line) {
             Dispatch::Immediate(r) => r,
             Dispatch::ToolCall { id, params } => {
-                execute_tool_call(id, params, &config, &cache_for_ops, &orchestrator, &journal).await
+                execute_tool_call(id, params, &config, &cache_for_ops, &orchestrator, &journal, &backends).await
             }
         };
 
@@ -1580,7 +1576,7 @@ mod tests {
                 "forward": {"level_1": ["US3333333"]}
             }
         });
-        sm.save_session(&session).unwrap();
+        sm.save_session(&mut session).unwrap();
 
         let loaded = sm.load_session(sid).unwrap();
         let chains = &loaded.citation_chains;
@@ -1598,7 +1594,7 @@ mod tests {
         let mut session = sm.load_session(sid).unwrap();
         session.classifications_explored.push("H02J50".to_string());
         session.classifications_explored.push("H01F38".to_string());
-        sm.save_session(&session).unwrap();
+        sm.save_session(&mut session).unwrap();
 
         let loaded = sm.load_session(sid).unwrap();
         assert_eq!(loaded.classifications_explored, vec!["H02J50", "H01F38"]);
@@ -1616,7 +1612,7 @@ mod tests {
             "US1234567".to_string(),
             vec!["EP1234567".to_string(), "WO2020123456".to_string()],
         );
-        sm.save_session(&session).unwrap();
+        sm.save_session(&mut session).unwrap();
 
         let loaded = sm.load_session(sid).unwrap();
         assert_eq!(loaded.patent_families["US1234567"].len(), 2);

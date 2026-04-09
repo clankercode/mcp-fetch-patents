@@ -169,7 +169,7 @@ impl SessionManager {
             citation_chains: Value::Object(serde_json::Map::new()),
             patent_families: BTreeMap::new(),
         };
-        let modified = self.save_session(&session)?;
+        let modified = self.save_session(&mut session)?;
         session.modified_at = modified;
         Ok(session)
     }
@@ -192,18 +192,17 @@ impl SessionManager {
         Ok(session)
     }
 
-    pub fn save_session(&self, session: &Session) -> Result<String> {
+    pub fn save_session(&self, session: &mut Session) -> Result<String> {
         let modified = now_iso();
-        let mut to_save = session.clone();
-        to_save.modified_at = modified.clone();
-        let path = self.dir.join(format!("{}.json", to_save.session_id));
-        let tmp_path = self.dir.join(format!("{}.json.tmp", to_save.session_id));
-        let content = serde_json::to_string_pretty(&to_save)?;
+        session.modified_at = modified.clone();
+        let path = self.dir.join(format!("{}.json", session.session_id));
+        let tmp_path = self.dir.join(format!("{}.json.tmp", session.session_id));
+        let content = serde_json::to_string_pretty(&*session)?;
         fs::write(&tmp_path, &content)
             .with_context(|| format!("Failed to write tmp file: {}", tmp_path.display()))?;
         fs::rename(&tmp_path, &path)
             .with_context(|| format!("Failed to rename tmp to {}", path.display()))?;
-        self.update_index(&to_save)?;
+        self.update_index(session)?;
         Ok(modified)
     }
 
@@ -254,7 +253,7 @@ impl SessionManager {
     pub fn append_query_result(&self, session_id: &str, query: QueryRecord) -> Result<()> {
         let mut session = self.load_session(session_id)?;
         session.queries.push(query);
-        self.save_session(&session)?;
+        self.save_session(&mut session)?;
         Ok(())
     }
 
@@ -265,7 +264,7 @@ impl SessionManager {
         } else {
             session.notes = format!("{}\n\n{}", session.notes, note);
         }
-        self.save_session(&session)?;
+        self.save_session(&mut session)?;
         Ok(())
     }
 
@@ -288,7 +287,7 @@ impl SessionManager {
             }
         }
         if updated {
-            self.save_session(&session)?;
+            self.save_session(&mut session)?;
         }
         Ok(())
     }
@@ -578,7 +577,7 @@ mod tests {
 
         let mut session2 = mgr.load_session(&session.session_id).unwrap();
         session2.notes = "updated".to_string();
-        mgr.save_session(&session2).unwrap();
+        mgr.save_session(&mut session2).unwrap();
 
         let reloaded = mgr.load_session(&session.session_id).unwrap();
         assert_ne!(reloaded.modified_at, first_modified);
@@ -740,7 +739,7 @@ mod tests {
 
         let mut loaded = mgr.load_session(&session.session_id).unwrap();
         loaded.notes = "updated".to_string();
-        mgr.save_session(&loaded).unwrap();
+        mgr.save_session(&mut loaded).unwrap();
 
         let index_path = mgr.dir.join(".index.json");
         let data = fs::read_to_string(&index_path).unwrap();
@@ -967,7 +966,7 @@ mod tests {
         let (_tmp, mgr) = make_manager();
         let mut session = mgr.create_session("Class", None, "").unwrap();
         session.classifications_explored = vec!["H02J50".to_string(), "H01F38".to_string()];
-        mgr.save_session(&session).unwrap();
+        mgr.save_session(&mut session).unwrap();
 
         let loaded = mgr
             .load_session(&mgr.list_sessions(None).unwrap()[0].session_id)

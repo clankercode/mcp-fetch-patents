@@ -12,13 +12,20 @@ use crate::ranking::PatentHit;
 pub struct SerpApiGooglePatentsBackend {
     api_key: String,
     base_url: String,
+    client: Client,
 }
 
 impl SerpApiGooglePatentsBackend {
-    pub fn new(api_key: String, base_url: Option<String>) -> Self {
+    pub fn new(api_key: String, base_url: Option<String>, client: Option<Client>) -> Self {
         Self {
             api_key,
             base_url: base_url.unwrap_or_else(|| "https://serpapi.com/search".to_string()),
+            client: client.unwrap_or_else(|| {
+                Client::builder()
+                    .timeout(Duration::from_secs(30))
+                    .build()
+                    .unwrap_or_else(|_| Client::new())
+            }),
         }
     }
 
@@ -55,18 +62,7 @@ impl SerpApiGooglePatentsBackend {
             params.push(("type", pt.to_string()));
         }
 
-        let client = match Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("SerpAPI client build failed: {}", e);
-                return Ok(vec![]);
-            }
-        };
-
-        let resp = match client.get(&self.base_url).query(&params).send().await {
+        let resp = match self.client.get(&self.base_url).query(&params).send().await {
             Ok(r) => r,
             Err(e) => {
                 warn!("SerpAPI Google Patents request failed: {}", e);
@@ -162,13 +158,20 @@ impl SerpApiGooglePatentsBackend {
 
 pub struct UsptoTextSearchBackend {
     base_url: String,
+    client: Client,
 }
 
 impl UsptoTextSearchBackend {
-    pub fn new(base_url: Option<String>) -> Self {
+    pub fn new(base_url: Option<String>, client: Option<Client>) -> Self {
         Self {
             base_url: base_url
                 .unwrap_or_else(|| "https://ppubs.uspto.gov/ppubs-api/v1".to_string()),
+            client: client.unwrap_or_else(|| {
+                Client::builder()
+                    .timeout(Duration::from_secs(30))
+                    .build()
+                    .unwrap_or_else(|_| Client::new())
+            }),
         }
     }
 
@@ -198,18 +201,7 @@ impl UsptoTextSearchBackend {
 
         let url = format!("{}/query", self.base_url.trim_end_matches('/'));
 
-        let client = match Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("USPTO PPUBS client build failed: {}", e);
-                return Ok(vec![]);
-            }
-        };
-
-        let resp = match client.post(&url).json(&body).send().await {
+        let resp = match self.client.post(&url).json(&body).send().await {
             Ok(r) => r,
             Err(e) => {
                 warn!("USPTO PPUBS text search request failed: {}", e);
@@ -311,6 +303,7 @@ pub struct EpoOpsSearchBackend {
     base_url: String,
     auth_url: String,
     token_state: Mutex<TokenState>,
+    client: Client,
 }
 
 impl EpoOpsSearchBackend {
@@ -318,6 +311,7 @@ impl EpoOpsSearchBackend {
         client_id: Option<String>,
         client_secret: Option<String>,
         base_url: Option<String>,
+        client: Option<Client>,
     ) -> Self {
         let base = base_url
             .unwrap_or_else(|| "https://ops.epo.org/3.2/rest-services".to_string());
@@ -336,6 +330,12 @@ impl EpoOpsSearchBackend {
             token_state: Mutex::new(TokenState {
                 token: None,
                 expires_at: None,
+            }),
+            client: client.unwrap_or_else(|| {
+                Client::builder()
+                    .timeout(Duration::from_secs(30))
+                    .build()
+                    .unwrap_or_else(|_| Client::new())
             }),
         }
     }
@@ -359,18 +359,13 @@ impl EpoOpsSearchBackend {
             }
         }
 
-        let client = Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|e| anyhow::anyhow!("client build: {}", e))?;
-
         let form_data = [
             ("grant_type", "client_credentials".to_string()),
             ("client_id", client_id),
             ("client_secret", client_secret),
         ];
 
-        let resp = match client
+        let resp = match self.client
             .post(&self.auth_url)
             .header("Content-Type", "application/x-www-form-urlencoded")
             .form(&form_data)
@@ -447,18 +442,7 @@ impl EpoOpsSearchBackend {
         let range = format!("1-{}", max_results);
         let params = [("q", cql.as_str()), ("Range", range.as_str())];
 
-        let client = match Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("EPO OPS client build failed: {}", e);
-                return Ok(vec![]);
-            }
-        };
-
-        let resp = match client
+        let resp = match self.client
             .get(&url)
             .headers(headers)
             .query(&params)
@@ -536,18 +520,7 @@ impl EpoOpsSearchBackend {
                 self.base_url, patent_id
             );
 
-            let client = match Client::builder()
-                .timeout(Duration::from_secs(30))
-                .build()
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    warn!("EPO OPS client build failed: {}", e);
-                    return Ok(vec![]);
-                }
-            };
-
-            let resp = match client.get(&url).headers(headers).send().await {
+            let resp = match self.client.get(&url).headers(headers).send().await {
                 Ok(r) => r,
                 Err(e) => {
                     warn!(
@@ -611,18 +584,7 @@ impl EpoOpsSearchBackend {
             self.base_url, patent_id
         );
 
-        let client = match Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("EPO OPS client build failed: {}", e);
-                return Ok(vec![]);
-            }
-        };
-
-        let resp = match client.get(&url).headers(headers).send().await {
+        let resp = match self.client.get(&url).headers(headers).send().await {
             Ok(r) => r,
             Err(e) => {
                 warn!("EPO OPS family fetch failed for {}: {}", patent_id, e);
@@ -1286,7 +1248,7 @@ mod tests {
 
     #[test]
     fn epo_ops_constructor_default_urls() {
-        let backend = EpoOpsSearchBackend::new(None, None, None);
+        let backend = EpoOpsSearchBackend::new(None, None, None, None);
         assert_eq!(
             backend.base_url,
             "https://ops.epo.org/3.2/rest-services"
@@ -1303,6 +1265,7 @@ mod tests {
             None,
             None,
             Some("https://custom.epo.org/rest-services".to_string()),
+            None,
         );
         assert_eq!(backend.base_url, "https://custom.epo.org/rest-services");
         assert_eq!(
@@ -1317,6 +1280,7 @@ mod tests {
             None,
             None,
             Some("https://custom.epo.org/api".to_string()),
+            None,
         );
         assert_eq!(backend.auth_url, "https://custom.epo.org/api/auth/accesstoken");
     }
@@ -1325,7 +1289,7 @@ mod tests {
     fn epo_ops_get_oauth_token_no_credentials() {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let backend = EpoOpsSearchBackend::new(None, None, None);
+            let backend = EpoOpsSearchBackend::new(None, None, None, None);
             let token = backend.get_oauth_token().await.unwrap();
             assert!(token.is_none());
         });
@@ -1333,14 +1297,14 @@ mod tests {
 
     #[test]
     fn serpapi_constructor_default_url() {
-        let backend = SerpApiGooglePatentsBackend::new("test-key".to_string(), None);
+        let backend = SerpApiGooglePatentsBackend::new("test-key".to_string(), None, None);
         assert_eq!(backend.api_key, "test-key");
         assert_eq!(backend.base_url, "https://serpapi.com/search");
     }
 
     #[test]
     fn uspto_constructor_default_url() {
-        let backend = UsptoTextSearchBackend::new(None);
+        let backend = UsptoTextSearchBackend::new(None, None);
         assert_eq!(
             backend.base_url,
             "https://ppubs.uspto.gov/ppubs-api/v1"
