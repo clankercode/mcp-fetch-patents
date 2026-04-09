@@ -97,6 +97,10 @@ ci-full:
 serve:
     python -m patent_mcp
 
+# Start the Rust MCP server (all 16 tools: fetch + search)
+serve-rust:
+    cargo run --manifest-path src/rust/Cargo.toml --bin patent-mcp-server
+
 # Start the patent-search MCP server (used by OpenCode agent)
 serve-search:
     python -m patent_mcp.search

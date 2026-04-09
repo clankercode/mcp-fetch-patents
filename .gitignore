@@ -31,6 +31,8 @@ coverage.xml
 # Tool / runtime state
 .opencode/
 .goal-loops/
+.patent-sessions/
+.patent-activity.jsonl
 .playwright-mcp/
 .claude/
 artifacts/

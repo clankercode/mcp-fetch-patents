@@ -1618,4 +1618,188 @@ mod tests {
         assert_eq!(loaded.patent_families["US1234567"].len(), 2);
         assert!(loaded.patent_families["US1234567"].contains(&"EP1234567".to_string()));
     }
+
+    fn make_real_deps() -> (
+        PatentConfig,
+        crate::cache::PatentCache,
+        crate::fetchers::FetcherOrchestrator,
+        crate::journal::ActivityJournal,
+        SearchBackends,
+        tempfile::TempDir,
+    ) {
+        let config = make_config();
+        let cache = crate::cache::PatentCache::new(&config).unwrap();
+        let orch_cache = crate::cache::PatentCache::new(&config).unwrap();
+        let orchestrator = crate::fetchers::FetcherOrchestrator::new(config.clone(), orch_cache);
+        let journal = crate::journal::ActivityJournal::new(config.activity_journal.clone());
+        let sessions_tmp = tempfile::tempdir().unwrap();
+        let backends = SearchBackends {
+            serpapi: config.serpapi_key.as_ref().map(|key| {
+                crate::search::searchers::SerpApiGooglePatentsBackend::new(key.clone(), None, None)
+            }),
+            uspto: crate::search::searchers::UsptoTextSearchBackend::new(None, None),
+            epo: crate::search::searchers::EpoOpsSearchBackend::new(
+                config.epo_client_id.clone(),
+                config.epo_client_secret.clone(),
+                None,
+                None,
+            ),
+            session_manager: crate::search::session_manager::SessionManager::new(Some(
+                sessions_tmp.path().to_path_buf(),
+            )),
+        };
+        (config, cache, orchestrator, journal, backends, sessions_tmp)
+    }
+
+    fn tool_params(name: &str, args: serde_json::Value) -> Value {
+        serde_json::json!({
+            "name": name,
+            "arguments": args
+        })
+    }
+
+    fn extract_payload(resp: RpcResponse) -> serde_json::Value {
+        let r = resp.result.unwrap();
+        let text = r["content"].as_array().unwrap()[0]["text"].as_str().unwrap();
+        serde_json::from_str(text).unwrap()
+    }
+
+    #[tokio::test]
+    async fn e2e_session_create_and_load() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(100.into());
+
+        let create_params = tool_params("patent_session_create", serde_json::json!({
+            "topic": "e2e-test", "notes": "integration"
+        }));
+        let resp = execute_tool_call(id.clone(), create_params, &config, &cache, &orchestrator, &journal, &backends).await;
+        assert!(resp.result.is_some());
+        let payload = extract_payload(resp);
+        let sid = payload["session_id"].as_str().unwrap();
+
+        let load_params = tool_params("patent_session_load", serde_json::json!({"session_id": sid}));
+        let resp = execute_tool_call(id.clone(), load_params, &config, &cache, &orchestrator, &journal, &backends).await;
+        assert!(resp.result.is_some());
+        let loaded = extract_payload(resp);
+        assert_eq!(loaded["topic"], "e2e-test");
+        assert_eq!(loaded["notes"], "integration");
+    }
+
+    #[tokio::test]
+    async fn e2e_session_note_and_annotate() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(200.into());
+
+        let create_params = tool_params("patent_session_create", serde_json::json!({"topic": "note-e2e"}));
+        let resp = execute_tool_call(id.clone(), create_params, &config, &cache, &orchestrator, &journal, &backends).await;
+        let payload = extract_payload(resp);
+        let sid = payload["session_id"].as_str().unwrap().to_string();
+
+        let note_params = tool_params("patent_session_note", serde_json::json!({
+            "session_id": sid, "note": "e2e research note"
+        }));
+        let resp = execute_tool_call(id.clone(), note_params, &config, &cache, &orchestrator, &journal, &backends).await;
+        let result = extract_payload(resp);
+        assert_eq!(result["status"], "note added");
+
+        let list_params = tool_params("patent_session_list", serde_json::json!({}));
+        let resp = execute_tool_call(id.clone(), list_params, &config, &cache, &orchestrator, &journal, &backends).await;
+        let list = extract_payload(resp);
+        assert!(list["sessions"].as_array().unwrap().len() >= 1);
+        assert!(list["total"].is_number());
+    }
+
+    #[tokio::test]
+    async fn e2e_session_export() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(300.into());
+
+        let tmp = tempfile::tempdir().unwrap();
+        let create_params = tool_params("patent_session_create", serde_json::json!({"topic": "export-e2e"}));
+        let resp = execute_tool_call(id.clone(), create_params, &config, &cache, &orchestrator, &journal, &backends).await;
+        let payload = extract_payload(resp);
+        let sid = payload["session_id"].as_str().unwrap();
+
+        let export_path = tmp.path().join("report.md");
+        let export_params = tool_params("patent_session_export", serde_json::json!({
+            "session_id": sid, "output_path": export_path.to_str().unwrap()
+        }));
+        let resp = execute_tool_call(id.clone(), export_params, &config, &cache, &orchestrator, &journal, &backends).await;
+        let result = extract_payload(resp);
+        assert_eq!(result["status"], "exported");
+        assert!(result["report_path"].is_string());
+        assert!(export_path.exists());
+    }
+
+    #[tokio::test]
+    async fn e2e_suggest_queries() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(400.into());
+
+        let params = tool_params("patent_suggest_queries", serde_json::json!({
+            "topic": "wireless power transfer", "prior_art_cutoff": "2020-01-01"
+        }));
+        let resp = execute_tool_call(id, params, &config, &cache, &orchestrator, &journal, &backends).await;
+        assert!(resp.result.is_some());
+        let payload = extract_payload(resp);
+        assert_eq!(payload["topic"], "wireless power transfer");
+        assert!(payload["planner_output"]["concepts"].is_array());
+        assert!(payload["planner_output"]["query_variants"].is_array());
+        assert!(payload["strategy"]["prior_art_notes"].is_string());
+    }
+
+    #[tokio::test]
+    async fn e2e_profile_login_stub() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(500.into());
+
+        let params = tool_params("patent_search_profile_login_start", serde_json::json!({"name": "test"}));
+        let resp = execute_tool_call(id, params, &config, &cache, &orchestrator, &journal, &backends).await;
+        let payload = extract_payload(resp);
+        assert_eq!(payload["status"], "unavailable");
+        assert_eq!(payload["profile_name"], "test");
+    }
+
+    #[tokio::test]
+    async fn e2e_search_natural_no_key() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(600.into());
+
+        let params = tool_params("patent_search_natural", serde_json::json!({
+            "description": "wireless charging"
+        }));
+        let resp = execute_tool_call(id, params, &config, &cache, &orchestrator, &journal, &backends).await;
+        assert!(resp.result.is_some());
+        let payload = extract_payload(resp);
+        assert!(payload["planner"]["concepts"].is_array());
+        assert!(payload["results"].is_array());
+        assert!(payload["elapsed_ms"].is_number());
+    }
+
+    #[tokio::test]
+    async fn e2e_search_structured_no_key() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(700.into());
+
+        let params = tool_params("patent_search_structured", serde_json::json!({
+            "query": "TTL+(wireless+power)", "sources": ["USPTO"]
+        }));
+        let resp = execute_tool_call(id, params, &config, &cache, &orchestrator, &journal, &backends).await;
+        assert!(resp.result.is_some());
+        let payload = extract_payload(resp);
+        assert!(payload["queries_run"].is_array());
+        assert!(payload["results"].is_array());
+    }
+
+    #[tokio::test]
+    async fn e2e_session_load_not_found() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(800.into());
+
+        let params = tool_params("patent_session_load", serde_json::json!({"session_id": "nonexistent-xyz"}));
+        let resp = execute_tool_call(id, params, &config, &cache, &orchestrator, &journal, &backends).await;
+        assert!(resp.error.is_some());
+        let err = resp.error.unwrap();
+        assert!(err.message.contains("not found"));
+    }
 }
