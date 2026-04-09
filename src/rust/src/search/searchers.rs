@@ -7,7 +7,6 @@ use tracing::warn;
 
 use crate::ranking::PatentHit;
 
-// TODO: Implement XML response parsing with quick_xml for EPO OPS endpoints.
 
 pub struct SerpApiGooglePatentsBackend {
     api_key: String,
@@ -478,8 +477,14 @@ impl EpoOpsSearchBackend {
             };
             Ok(Self::parse_json_response(&data))
         } else {
-            let _ = resp.text().await;
-            Ok(vec![])
+            let text = match resp.text().await {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!("EPO OPS search body read error: {}", e);
+                    return Ok(vec![]);
+                }
+            };
+            Ok(Self::parse_xml_search_response(&text))
         }
     }
 
@@ -557,7 +562,14 @@ impl EpoOpsSearchBackend {
                 };
                 Ok(Self::extract_ids_from_json(&data))
             } else {
-                Ok(vec![])
+                let text = match resp.text().await {
+                    Ok(t) => t,
+                    Err(e) => {
+                        warn!("EPO OPS citation body read error: {}", e);
+                        return Ok(vec![]);
+                    }
+                };
+                Ok(Self::parse_xml_citations_response(&text))
             }
         } else {
             let cql = format!("ct={}", patent_id);
@@ -618,7 +630,14 @@ impl EpoOpsSearchBackend {
             };
             Ok(Self::parse_family_json(&data))
         } else {
-            Ok(vec![])
+            let text = match resp.text().await {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!("EPO OPS family body read error: {}", e);
+                    return Ok(vec![]);
+                }
+            };
+            Ok(Self::parse_xml_family_response(&text))
         }
     }
 
@@ -945,6 +964,241 @@ impl EpoOpsSearchBackend {
             }
         }
         members
+    }
+
+    fn parse_xml_search_response(body: &str) -> Vec<PatentHit> {
+        use quick_xml::Reader;
+        use quick_xml::events::Event;
+
+        let mut reader = Reader::from_str(body);
+        reader.config_mut().trim_text(true);
+
+        let mut hits = Vec::new();
+        let mut in_doc_id = false;
+        let mut country = String::new();
+        let mut doc_number = String::new();
+        let mut kind = String::new();
+        let mut current_tag = String::new();
+        let mut buf = Vec::new();
+
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                    let local = local_name(e.name().as_ref());
+                    match local.as_str() {
+                        "document-id" => {
+                            in_doc_id = true;
+                            country.clear();
+                            doc_number.clear();
+                            kind.clear();
+                        }
+                        "country" | "doc-number" | "kind" if in_doc_id => {
+                            current_tag = local.clone();
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(Event::Text(e)) => {
+                    if in_doc_id && !current_tag.is_empty() {
+                        let val = String::from_utf8_lossy(e.as_ref());
+                        let v = val.trim().to_string();
+                        match current_tag.as_str() {
+                            "country" => country = v,
+                            "doc-number" => doc_number = v,
+                            "kind" => kind = v,
+                            _ => {}
+                        }
+                    }
+                }
+                Ok(Event::End(e)) => {
+                    let local = local_name(e.name().as_ref());
+                    if local == "document-id" && in_doc_id {
+                        in_doc_id = false;
+                        current_tag.clear();
+                        if !doc_number.is_empty() {
+                            let patent_id = format!("{}{}{}", country, doc_number, kind);
+                            if !patent_id.trim().is_empty() {
+                                hits.push(PatentHit {
+                                    patent_id,
+                                    title: None,
+                                    date: None,
+                                    assignee: None,
+                                    inventors: vec![],
+                                    abstract_text: None,
+                                    source: "EPO_OPS".to_string(),
+                                    relevance: "unknown".to_string(),
+                                    note: String::new(),
+                                    prior_art: None,
+                                    url: None,
+                                });
+                            }
+                        }
+                    }
+                    if local == current_tag {
+                        current_tag.clear();
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(e) => {
+                    warn!("EPO OPS search XML parse error: {}", e);
+                    break;
+                }
+                _ => {}
+            }
+            buf.clear();
+        }
+        hits
+    }
+
+    fn parse_xml_citations_response(body: &str) -> Vec<String> {
+        use quick_xml::Reader;
+        use quick_xml::events::Event;
+
+        let mut reader = Reader::from_str(body);
+        reader.config_mut().trim_text(true);
+
+        let mut ids = Vec::new();
+        let mut in_patcit_doc_id = false;
+        let mut country = String::new();
+        let mut doc_number = String::new();
+        let mut current_tag = String::new();
+        let mut buf = Vec::new();
+
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                    let local = local_name(e.name().as_ref());
+                    match local.as_str() {
+                        "document-id" => {
+                            in_patcit_doc_id = true;
+                            country.clear();
+                            doc_number.clear();
+                        }
+                        "country" | "doc-number" if in_patcit_doc_id => {
+                            current_tag = local.clone();
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(Event::Text(e)) => {
+                    if in_patcit_doc_id && !current_tag.is_empty() {
+                        let val = String::from_utf8_lossy(e.as_ref());
+                        let v = val.trim().to_string();
+                        match current_tag.as_str() {
+                            "country" => country = v,
+                            "doc-number" => doc_number = v,
+                            _ => {}
+                        }
+                    }
+                }
+                Ok(Event::End(e)) => {
+                    let local = local_name(e.name().as_ref());
+                    if local == "document-id" && in_patcit_doc_id {
+                        in_patcit_doc_id = false;
+                        current_tag.clear();
+                        if !doc_number.is_empty() {
+                            ids.push(format!("{}{}", country, doc_number));
+                        }
+                    }
+                    if local == current_tag {
+                        current_tag.clear();
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(e) => {
+                    warn!("EPO OPS citation XML parse error: {}", e);
+                    break;
+                }
+                _ => {}
+            }
+            buf.clear();
+        }
+        ids
+    }
+
+    fn parse_xml_family_response(body: &str) -> Vec<serde_json::Value> {
+        use quick_xml::Reader;
+        use quick_xml::events::Event;
+
+        let mut reader = Reader::from_str(body);
+        reader.config_mut().trim_text(true);
+
+        let mut members = Vec::new();
+        let mut in_doc_id = false;
+        let mut country = String::new();
+        let mut doc_number = String::new();
+        let mut kind = String::new();
+        let mut date = String::new();
+        let mut current_tag = String::new();
+        let mut buf = Vec::new();
+
+        loop {
+            match reader.read_event_into(&mut buf) {
+                Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                    let local = local_name(e.name().as_ref());
+                    match local.as_str() {
+                        "document-id" => {
+                            in_doc_id = true;
+                            country.clear();
+                            doc_number.clear();
+                            kind.clear();
+                            date.clear();
+                        }
+                        "country" | "doc-number" | "kind" | "date" if in_doc_id => {
+                            current_tag = local.clone();
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(Event::Text(e)) => {
+                    if in_doc_id && !current_tag.is_empty() {
+                        let val = String::from_utf8_lossy(e.as_ref());
+                        let v = val.trim().to_string();
+                        match current_tag.as_str() {
+                            "country" => country = v,
+                            "doc-number" => doc_number = v,
+                            "kind" => kind = v,
+                            "date" => date = v,
+                            _ => {}
+                        }
+                    }
+                }
+                Ok(Event::End(e)) => {
+                    let local = local_name(e.name().as_ref());
+                    if local == "document-id" && in_doc_id {
+                        in_doc_id = false;
+                        current_tag.clear();
+                        if !doc_number.is_empty() {
+                            members.push(serde_json::json!({
+                                "patent_id": format!("{}{}{}", country, doc_number, kind),
+                                "country": country,
+                                "doc_type": kind,
+                                "date": date,
+                            }));
+                        }
+                    }
+                    if local == current_tag {
+                        current_tag.clear();
+                    }
+                }
+                Ok(Event::Eof) => break,
+                Err(e) => {
+                    warn!("EPO OPS family XML parse error: {}", e);
+                    break;
+                }
+                _ => {}
+            }
+            buf.clear();
+        }
+        members
+    }
+}
+
+fn local_name(raw: &[u8]) -> String {
+    let name = String::from_utf8_lossy(raw);
+    match name.rfind(':') {
+        Some(pos) => name[pos + 1..].to_string(),
+        None => name.to_string(),
     }
 }
 
@@ -1309,5 +1563,186 @@ mod tests {
             backend.base_url,
             "https://ppubs.uspto.gov/ppubs-api/v1"
         );
+    }
+
+    #[test]
+    fn epo_ops_parse_xml_search_response_basic() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ops:world-patent-data xmlns:ops="http://ops.epo.org" xmlns:ex="http://www.epo.org/exchange">
+  <ops:biblio-search total-result-count="2">
+    <ops:search-result>
+      <ops:publication-reference data-format="docdb">
+        <document-id>
+          <country>US</country>
+          <doc-number>1234567</doc-number>
+          <kind>B2</kind>
+        </document-id>
+      </ops:publication-reference>
+      <ops:publication-reference data-format="docdb">
+        <document-id>
+          <country>EP</country>
+          <doc-number>3456789</doc-number>
+          <kind>A1</kind>
+        </document-id>
+      </ops:publication-reference>
+    </ops:search-result>
+  </ops:biblio-search>
+</ops:world-patent-data>"#;
+        let hits = EpoOpsSearchBackend::parse_xml_search_response(xml);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].patent_id, "US1234567B2");
+        assert_eq!(hits[0].source, "EPO_OPS");
+        assert_eq!(hits[1].patent_id, "EP3456789A1");
+    }
+
+    #[test]
+    fn epo_ops_parse_xml_search_response_empty() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ops:world-patent-data xmlns:ops="http://ops.epo.org"></ops:world-patent-data>"#;
+        let hits = EpoOpsSearchBackend::parse_xml_search_response(xml);
+        assert!(hits.is_empty());
+    }
+
+    #[test]
+    fn epo_ops_parse_xml_search_response_no_kind() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ops:world-patent-data xmlns:ops="http://ops.epo.org">
+  <ops:biblio-search>
+    <ops:search-result>
+      <ops:publication-reference data-format="docdb">
+        <document-id>
+          <country>WO</country>
+          <doc-number>2020012345</doc-number>
+        </document-id>
+      </ops:publication-reference>
+    </ops:search-result>
+  </ops:biblio-search>
+</ops:world-patent-data>"#;
+        let hits = EpoOpsSearchBackend::parse_xml_search_response(xml);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].patent_id, "WO2020012345");
+    }
+
+    #[test]
+    fn epo_ops_parse_xml_citations_response_basic() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ops:world-patent-data xmlns:ops="http://ops.epo.org" xmlns:ex="http://www.epo.org/exchange">
+  <ex:patent-family>
+    <ex:family-member>
+      <ex:bibliographic-data>
+        <ex:references-cited>
+          <ex:citation>
+            <ex:patcit>
+              <ex:document-id>
+                <ex:country>US</ex:country>
+                <ex:doc-number>1111111</ex:doc-number>
+                <ex:kind>A1</ex:kind>
+              </ex:document-id>
+            </ex:patcit>
+          </ex:citation>
+          <ex:citation>
+            <ex:patcit>
+              <ex:document-id>
+                <ex:country>EP</ex:country>
+                <ex:doc-number>2222222</ex:doc-number>
+              </ex:document-id>
+            </ex:patcit>
+          </ex:citation>
+        </ex:references-cited>
+      </ex:bibliographic-data>
+    </ex:family-member>
+  </ex:patent-family>
+</ops:world-patent-data>"#;
+        let ids = EpoOpsSearchBackend::parse_xml_citations_response(xml);
+        assert_eq!(ids.len(), 2);
+        assert_eq!(ids[0], "US1111111");
+        assert_eq!(ids[1], "EP2222222");
+    }
+
+    #[test]
+    fn epo_ops_parse_xml_citations_response_empty() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ops:world-patent-data xmlns:ops="http://ops.epo.org"></ops:world-patent-data>"#;
+        let ids = EpoOpsSearchBackend::parse_xml_citations_response(xml);
+        assert!(ids.is_empty());
+    }
+
+    #[test]
+    fn epo_ops_parse_xml_family_response_basic() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ops:world-patent-data xmlns:ops="http://ops.epo.org" xmlns:ex="http://www.epo.org/exchange">
+  <ops:patent-family>
+    <ops:family-member>
+      <ex:bibliographic-data xmlns:ex="http://www.epo.org/exchange">
+        <ex:publication-reference>
+          <ex:document-id>
+            <ex:country>EP</ex:country>
+            <ex:doc-number>1234567</ex:doc-number>
+            <ex:kind>A1</ex:kind>
+            <ex:date>20200115</ex:date>
+          </ex:document-id>
+        </ex:publication-reference>
+        <ex:invention-title lang="en">Some Title</ex:invention-title>
+      </ex:bibliographic-data>
+    </ops:family-member>
+    <ops:family-member>
+      <ex:bibliographic-data xmlns:ex="http://www.epo.org/exchange">
+        <ex:publication-reference>
+          <ex:document-id>
+            <ex:country>US</ex:country>
+            <ex:doc-number>7654321</ex:doc-number>
+            <ex:kind>B2</ex:kind>
+            <ex:date>20210620</ex:date>
+          </ex:document-id>
+        </ex:publication-reference>
+      </ex:bibliographic-data>
+    </ops:family-member>
+  </ops:patent-family>
+</ops:world-patent-data>"#;
+        let members = EpoOpsSearchBackend::parse_xml_family_response(xml);
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[0]["patent_id"].as_str().unwrap(), "EP1234567A1");
+        assert_eq!(members[0]["country"].as_str().unwrap(), "EP");
+        assert_eq!(members[0]["date"].as_str().unwrap(), "20200115");
+        assert_eq!(members[1]["patent_id"].as_str().unwrap(), "US7654321B2");
+        assert_eq!(members[1]["country"].as_str().unwrap(), "US");
+        assert_eq!(members[1]["date"].as_str().unwrap(), "20210620");
+    }
+
+    #[test]
+    fn epo_ops_parse_xml_family_response_empty() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ops:world-patent-data xmlns:ops="http://ops.epo.org"></ops:world-patent-data>"#;
+        let members = EpoOpsSearchBackend::parse_xml_family_response(xml);
+        assert!(members.is_empty());
+    }
+
+    #[test]
+    fn epo_ops_parse_xml_family_multiple_doc_ids() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<ops:world-patent-data xmlns:ops="http://ops.epo.org" xmlns:ex="http://www.epo.org/exchange">
+  <ops:patent-family>
+    <ops:family-member>
+      <ex:bibliographic-data>
+        <ex:publication-reference>
+          <ex:document-id>
+            <ex:country>EP</ex:country>
+            <ex:doc-number>1111111</ex:doc-number>
+            <ex:kind>A1</ex:kind>
+          </ex:document-id>
+          <ex:document-id>
+            <ex:country>US</ex:country>
+            <ex:doc-number>2222222</ex:doc-number>
+            <ex:kind>B1</ex:kind>
+          </ex:document-id>
+        </ex:publication-reference>
+      </ex:bibliographic-data>
+    </ops:family-member>
+  </ops:patent-family>
+</ops:world-patent-data>"#;
+        let members = EpoOpsSearchBackend::parse_xml_family_response(xml);
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[0]["patent_id"].as_str().unwrap(), "EP1111111A1");
+        assert_eq!(members[1]["patent_id"].as_str().unwrap(), "US2222222B1");
     }
 }
