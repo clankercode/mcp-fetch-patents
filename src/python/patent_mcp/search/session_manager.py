@@ -478,6 +478,26 @@ class SessionManager:
                 lines.append(f"**Timestamp:** {query.timestamp}  ")
                 lines.append(f"**Query:** `{query.query_text}`  ")
                 lines.append(f"**Results:** {query.result_count}  ")
+                if query.metadata:
+                    status = query.metadata.get("status")
+                    if status:
+                        lines.append(f"**Status:** {status}  ")
+                    error = query.metadata.get("error")
+                    if error:
+                        lines.append(f"**Error:** {error}  ")
+                    search_context = query.metadata.get("search_context")
+                    if isinstance(search_context, dict):
+                        context_bits: list[str] = []
+                        effective_backend = search_context.get("effective_backend")
+                        if effective_backend:
+                            context_bits.append(f"effective backend: {effective_backend}")
+                        browser_backend_error = search_context.get("browser_backend_error")
+                        if browser_backend_error:
+                            context_bits.append("browser backend error recorded")
+                        if context_bits:
+                            lines.append(
+                                f"**Search Context:** {', '.join(context_bits)}  "
+                            )
                 lines.append("")
                 if query.results:
                     lines.append("| Patent ID | Title | Date | Relevance |")

@@ -24,6 +24,7 @@ just serve-rust             # Run Rust MCP server
 just serve-rust-http        # Run Rust MCP server over localhost HTTP
 just serve-http             # Run Python fetch MCP server over localhost HTTP
 just serve-search-http      # Run Python search MCP server over localhost HTTP
+just install-rs
 ```
 
 For direct cargo commands:
@@ -31,6 +32,8 @@ For direct cargo commands:
 CC=gcc cargo test --manifest-path src/rust/Cargo.toml
 CC=gcc cargo build --manifest-path src/rust/Cargo.toml
 ```
+
+After you have completed a your tasks, commit your work and run 'just install-rs'.
 
 ## Rust Module Layout
 

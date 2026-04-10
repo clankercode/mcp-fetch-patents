@@ -422,6 +422,31 @@ class TestExportMarkdown:
         content = mgr.export_markdown(session.session_id).read_text()
         assert "TTL/(wireless AND charging) AND ACLM/(metal)" in content
 
+    def test_export_includes_query_status_and_error(self, tmp_path):
+        mgr = SessionManager(tmp_path)
+        session = mgr.create_session("Topic")
+        q = QueryRecord(
+            query_id="q001",
+            timestamp="2026-04-07T10:00:00+00:00",
+            source="Google_Patents_Browser",
+            query_text="wireless charging",
+            result_count=0,
+            results=[],
+            metadata={
+                "status": "error",
+                "error": "429 Too Many Requests",
+                "search_context": {
+                    "effective_backend": "browser",
+                    "browser_backend_error": "429 Too Many Requests",
+                },
+            },
+        )
+        mgr.append_query_result(session.session_id, q)
+        content = mgr.export_markdown(session.session_id).read_text()
+        assert "Status:** error" in content
+        assert "429 Too Many Requests" in content
+        assert "Search Context" in content
+
     def test_export_patents_sorted_by_relevance(self, tmp_path):
         mgr = SessionManager(tmp_path)
         session = mgr.create_session("Topic")

@@ -11,6 +11,14 @@ pub struct SerpApiGooglePatentsBackend {
     pub client: Client,
 }
 
+fn classify_http_status(status: u16) -> String {
+    if matches!(status, 403 | 429) {
+        format!("SerpAPI Google Patents rate limited: HTTP {}", status)
+    } else {
+        format!("SerpAPI Google Patents HTTP error {}", status)
+    }
+}
+
 impl SerpApiGooglePatentsBackend {
     pub fn new(
         api_key: String,
@@ -80,11 +88,9 @@ impl SerpApiGooglePatentsBackend {
 
         if !resp.status().is_success() {
             let status = resp.status().as_u16();
-            warn!("SerpAPI Google Patents HTTP error {}", status);
-            return Err(anyhow::anyhow!(
-                "SerpAPI Google Patents HTTP error {}",
-                status
-            ));
+            let message = classify_http_status(status);
+            warn!("{}", message);
+            return Err(anyhow::anyhow!(message));
         }
 
         let data: serde_json::Value = resp.json().await.map_err(|e| {
@@ -244,5 +250,12 @@ mod tests {
         });
         let hit = SerpApiGooglePatentsBackend::map_result(&item).unwrap();
         assert_eq!(hit.date.as_deref(), Some("2018-03-20"));
+    }
+
+    #[test]
+    fn serpapi_http_429_is_classified_as_rate_limited() {
+        assert!(classify_http_status(429).contains("rate limited"));
+        assert!(classify_http_status(403).contains("rate limited"));
+        assert!(classify_http_status(500).contains("HTTP error 500"));
     }
 }

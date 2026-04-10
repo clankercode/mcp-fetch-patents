@@ -92,6 +92,18 @@ fn count_unique_patents(session: &Session) -> usize {
     seen.len()
 }
 
+fn collect_backend_attempts<'a>(session: &'a Session) -> Vec<&'a Value> {
+    let mut attempts = Vec::new();
+    for query in &session.queries {
+        if let Some(meta) = query.metadata.as_ref() {
+            if let Some(items) = meta.get("backend_attempts").and_then(|v| v.as_array()) {
+                attempts.extend(items.iter());
+            }
+        }
+    }
+    attempts
+}
+
 fn update_index(dir: &Path, session: &Session) -> Result<()> {
     let index_path = dir.join(".index.json");
 
@@ -407,11 +419,32 @@ impl SessionManager {
         }
         let total_queries = session.queries.len();
         let total_patents = unique_patents.len();
+        let backend_attempts = collect_backend_attempts(&session);
+        let rate_limited_attempts = backend_attempts
+            .iter()
+            .filter(|attempt| {
+                attempt
+                    .get("status")
+                    .and_then(|v| v.as_str())
+                    .map(|status| status == "rate_limited")
+                    .unwrap_or(false)
+            })
+            .count();
 
         lines.push("## Summary".to_string());
         lines.push(String::new());
         lines.push(format!("- **Queries run:** {}", total_queries));
         lines.push(format!("- **Unique patents found:** {}", total_patents));
+        if !backend_attempts.is_empty() {
+            lines.push(format!(
+                "- **Backend attempts recorded:** {}",
+                backend_attempts.len()
+            ));
+            lines.push(format!(
+                "- **Rate-limited backend attempts:** {}",
+                rate_limited_attempts
+            ));
+        }
         if !session.classifications_explored.is_empty() {
             lines.push(format!(
                 "- **Classifications explored:** {}",
@@ -472,7 +505,74 @@ impl SessionManager {
                 lines.push(format!("**Timestamp:** {}  ", query.timestamp));
                 lines.push(format!("**Query:** `{}`  ", query.query_text));
                 lines.push(format!("**Results:** {}  ", query.result_count));
+                if let Some(meta) = query.metadata.as_ref() {
+                    if let Some(requested) = meta.get("backend_requested").and_then(|v| v.as_str())
+                    {
+                        lines.push(format!("**Backend Requested:** `{}`  ", requested));
+                    }
+                    if let Some(effective) = meta.get("backend_effective").and_then(|v| v.as_str())
+                    {
+                        lines.push(format!("**Backend Effective:** `{}`  ", effective));
+                    }
+                    if let Some(fallback_used) = meta.get("fallback_used").and_then(|v| v.as_bool())
+                    {
+                        lines.push(format!("**Fallback Used:** {}  ", fallback_used));
+                    }
+                }
                 lines.push(String::new());
+                if let Some(meta) = query.metadata.as_ref() {
+                    if let Some(attempts) = meta.get("backend_attempts").and_then(|v| v.as_array())
+                    {
+                        if !attempts.is_empty() {
+                            lines.push(
+                                "| Backend | Query Variant | Status | Rate Limited | HTTP | Results | Error |"
+                                    .to_string(),
+                            );
+                            lines.push(
+                                "|---------|---------------|--------|--------------|------|---------|-------|"
+                                    .to_string(),
+                            );
+                            for attempt in attempts {
+                                let source =
+                                    attempt.get("source").and_then(|v| v.as_str()).unwrap_or("");
+                                let variant = attempt
+                                    .get("variant_type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                let status =
+                                    attempt.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                                let rate_limited = attempt
+                                    .get("rate_limited")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                                let http_status = attempt
+                                    .get("http_status")
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_default();
+                                let result_count = attempt
+                                    .get("result_count")
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_else(|| "0".to_string());
+                                let error = attempt
+                                    .get("error")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .replace('|', "\\|");
+                                lines.push(format!(
+                                    "| {} | {} | {} | {} | {} | {} | {} |",
+                                    source,
+                                    variant,
+                                    status,
+                                    rate_limited,
+                                    http_status,
+                                    result_count,
+                                    error
+                                ));
+                            }
+                            lines.push(String::new());
+                        }
+                    }
+                }
                 if !query.results.is_empty() {
                     lines.push("| Patent ID | Title | Date | Relevance |".to_string());
                     lines.push("|-----------|-------|------|-----------|".to_string());
@@ -1043,6 +1143,59 @@ mod tests {
         let content = fs::read_to_string(&output).unwrap();
         assert!(content.contains("H02J50"));
         assert!(content.contains("H01F38"));
+    }
+
+    #[tokio::test]
+    async fn backend_attempts_are_exported() {
+        let (_tmp, mgr) = make_manager();
+        let session = mgr.create_session("Attempts", None, "").await.unwrap();
+
+        let query = QueryRecord {
+            query_id: "q001".to_string(),
+            timestamp: "2026-04-10T00:00:00Z".to_string(),
+            source: "natural_search".to_string(),
+            query_text: "wireless charging".to_string(),
+            result_count: 0,
+            results: vec![],
+            metadata: Some(serde_json::json!({
+                "backend_requested": "auto",
+                "backend_effective": "browser",
+                "fallback_used": true,
+                "backend_attempts": [
+                    {
+                        "source": "Google_Patents_Browser",
+                        "variant_type": "broad",
+                        "status": "rate_limited",
+                        "rate_limited": true,
+                        "http_status": 429,
+                        "result_count": 0,
+                        "error": "Google Patents browser rate limited"
+                    },
+                    {
+                        "source": "Google_Patents_SerpAPI",
+                        "variant_type": "broad",
+                        "status": "success",
+                        "rate_limited": false,
+                        "result_count": 3
+                    }
+                ]
+            })),
+        };
+        mgr.append_query_result(&session.session_id, query)
+            .await
+            .unwrap();
+
+        let output = mgr
+            .export_markdown(&session.session_id, None)
+            .await
+            .unwrap();
+        let content = fs::read_to_string(&output).unwrap();
+        assert!(content.contains("**Backend Requested:** `auto`"));
+        assert!(content.contains("**Backend Effective:** `browser`"));
+        assert!(content.contains("Rate-limited backend attempts:** 1"));
+        assert!(content.contains("Google_Patents_Browser"));
+        assert!(content.contains("rate_limited"));
+        assert!(content.contains("Google_Patents_SerpAPI"));
     }
 
     #[test]

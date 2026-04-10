@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use chromiumoxide::Page;
 use regex::Regex;
 use tracing::warn;
@@ -25,6 +25,31 @@ fn patent_href_re() -> &'static Regex {
 
 fn patent_body_re() -> &'static Regex {
     PATENT_BODY_RE.get_or_init(|| Regex::new(r"\b([A-Z]{2}\d{5,12}[A-Z]?\d?)\b").unwrap())
+}
+
+fn is_rate_limited_text(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    [
+        "429",
+        "403",
+        "too many requests",
+        "rate limit",
+        "rate-limited",
+        "unusual traffic",
+        "not a robot",
+        "verify you are human",
+        "captcha",
+        "automated queries",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+async fn page_looks_rate_limited(page: &Page) -> bool {
+    page.content()
+        .await
+        .map(|html| is_rate_limited_text(&html))
+        .unwrap_or(false)
 }
 
 pub struct GooglePatentsBrowserSearch {
@@ -99,7 +124,10 @@ impl GooglePatentsBrowserSearch {
             .acquire_lock(&self.profile_name, "search")
         {
             warn!("Failed to acquire profile lock: {}", e);
-            return Ok(vec![]);
+            return Err(anyhow!(
+                "Google Patents browser unavailable: profile lock failed: {}",
+                e
+            ));
         }
 
         let _lock_guard = LockGuard {
@@ -122,7 +150,7 @@ impl GooglePatentsBrowserSearch {
             Ok(p) => p,
             Err(e) => {
                 warn!("Failed to get browser page: {}", e);
-                return Ok(vec![]);
+                return Err(anyhow!("Google Patents browser unavailable: {}", e));
             }
         };
 
@@ -135,6 +163,12 @@ impl GooglePatentsBrowserSearch {
                 Ok(_) => {}
                 Err(e) => {
                     warn!("Navigation failed for page {}: {}", page_num, e);
+                    if is_rate_limited_text(&e.to_string()) {
+                        return Err(anyhow!("Google Patents browser rate limited: {}", e));
+                    }
+                    if page_num == 0 {
+                        return Err(anyhow!("Google Patents browser navigation failed: {}", e));
+                    }
                     break;
                 }
             }
@@ -145,6 +179,9 @@ impl GooglePatentsBrowserSearch {
             let page_hits = extract_patent_hits(&page, &self.debug_html_dir).await;
 
             if page_hits.is_empty() {
+                if page_looks_rate_limited(&page).await {
+                    return Err(anyhow!("Google Patents browser rate limited"));
+                }
                 break;
             }
 
@@ -535,5 +572,16 @@ mod tests {
         let re = patent_href_re();
         let caps = re.captures("/patent/US9999999B2/en").unwrap();
         assert_eq!(&caps[1], "US9999999B2");
+    }
+
+    #[test]
+    fn test_rate_limit_detector_matches_google_throttle_copy() {
+        assert!(is_rate_limited_text(
+            "Our systems have detected unusual traffic from your computer network"
+        ));
+        assert!(is_rate_limited_text("HTTP 429 Too Many Requests"));
+        assert!(!is_rate_limited_text(
+            "Search results for wireless charging patents"
+        ));
     }
 }

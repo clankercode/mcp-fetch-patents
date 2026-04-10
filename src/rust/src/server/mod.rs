@@ -858,6 +858,17 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                         queries_run: vec![],
                         enriched_ids: vec![],
                         elapsed_ms: 0.0,
+                        backend_requested: backend.clone(),
+                        backend_effective: if backend == "auto" {
+                            if ctx.config.search_backend_default == "auto" {
+                                "browser".to_string()
+                            } else {
+                                ctx.config.search_backend_default.clone()
+                            }
+                        } else {
+                            backend.clone()
+                        },
+                        fallback_used: false,
                     }
                 });
 
@@ -865,28 +876,33 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                 result.scored.iter().map(|s| &s.hit).collect();
 
             if let Some(ref sid) = session_id {
-                if !all_hits.is_empty() {
-                    if let Err(e) = append_search_to_session(
-                        &ctx.backends.session_manager,
-                        sid,
-                        &description,
-                        "serpapi",
-                        &all_hits,
-                        Some(serde_json::json!({
-                            "search_mode": backend,
-                            "planner_concepts": result.intent.concepts,
-                            "planner_synonyms": result.intent.synonyms,
-                            "query_variants": result.intent.query_variants.iter().map(|v| &v.query).collect::<Vec<_>>(),
-                        })),
-                        None,
-                    ).await
-                    { warn!("Session append failed: {}", e); }
+                if let Err(e) = append_search_to_session(
+                    &ctx.backends.session_manager,
+                    sid,
+                    &description,
+                    "natural_search",
+                    &all_hits,
+                    Some(serde_json::json!({
+                        "backend_requested": result.backend_requested,
+                        "backend_effective": result.backend_effective,
+                        "fallback_used": result.fallback_used,
+                        "backend_attempts": result.queries_run,
+                        "planner_concepts": result.intent.concepts,
+                        "planner_synonyms": result.intent.synonyms,
+                        "query_variants": result.intent.query_variants.iter().map(|v| &v.query).collect::<Vec<_>>(),
+                    })),
+                    None,
+                ).await
+                {
+                    warn!("Session append failed: {}", e);
                 }
             }
 
             let payload = serde_json::json!({
                 "query": description,
                 "backend": backend,
+                "backend_effective": result.backend_effective,
+                "fallback_used": result.fallback_used,
                 "date_cutoff": date_cutoff,
                 "elapsed_ms": (result.elapsed_ms.round()) as u64,
                 "planner": {
@@ -1592,33 +1608,51 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                         queries_run: vec![],
                         enriched_ids: vec![],
                         elapsed_ms: 0.0,
+                        backend_requested: backend.clone(),
+                        backend_effective: if backend == "auto" {
+                            if ctx.config.search_backend_default == "auto" {
+                                "browser".to_string()
+                            } else {
+                                ctx.config.search_backend_default.clone()
+                            }
+                        } else {
+                            backend.clone()
+                        },
+                        fallback_used: false,
                     }
                 });
 
             let all_hits: Vec<&crate::ranking::PatentHit> =
                 result.scored.iter().map(|s| &s.hit).collect();
-            if !all_hits.is_empty() {
-                if let Err(e) = append_search_to_session(
+
+            if let Err(e) = append_search_to_session(
                     &ctx.backends.session_manager,
                     &session_id,
                     &description,
                     "quick_search",
                     &all_hits,
                     Some(serde_json::json!({
-                        "search_mode": backend,
+                        "backend_requested": result.backend_requested,
+                        "backend_effective": result.backend_effective,
+                        "fallback_used": result.fallback_used,
+                        "backend_attempts": result.queries_run,
                         "planner_concepts": result.intent.concepts,
                         "planner_synonyms": result.intent.synonyms,
                         "query_variants": result.intent.query_variants.iter().map(|v| &v.query).collect::<Vec<_>>(),
                     })),
                     None,
-                ).await
-                    { warn!("Session append failed: {}", e); }
+                )
+                .await
+            {
+                warn!("Session append failed: {}", e);
             }
 
             let payload = serde_json::json!({
                 "session_id": session_id,
                 "topic": description,
                 "backend": backend,
+                "backend_effective": result.backend_effective,
+                "fallback_used": result.fallback_used,
                 "prior_art_cutoff": prior_art_cutoff,
                 "elapsed_ms": (result.elapsed_ms.round()) as u64,
                 "total_found": result.scored.len(),
@@ -1629,6 +1663,7 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                         "type": v.variant_type,
                     })).collect::<Vec<_>>(),
                 },
+                "queries_run": result.queries_run,
                 "results": result.scored.iter().map(|s| serde_json::json!({
                     "patent_id": s.hit.patent_id,
                     "title": s.hit.title,
@@ -1957,7 +1992,7 @@ mod tests {
             search_browser_max_pages: 3,
             search_browser_idle_timeout: 1800.0,
             search_browser_debug_html_dir: None,
-            search_backend_default: "serpapi".into(),
+            search_backend_default: "browser".into(),
             search_enrich_top_n: 5,
         }
     }
@@ -2609,6 +2644,31 @@ mod tests {
         assert!(payload["planner"]["concepts"].is_array());
         assert!(payload["results"].is_array());
         assert!(payload["elapsed_ms"].is_number());
+    }
+
+    #[tokio::test]
+    async fn e2e_quick_search_exposes_backend_attempts() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(650.into());
+
+        let params = tool_params(
+            "patent_quick_search",
+            serde_json::json!({
+                "description": "wireless charging",
+                "max_results": 5
+            }),
+        );
+        let resp = execute_tool_call(
+            id,
+            params,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
+        )
+        .await;
+        assert!(resp.result.is_some());
+        let payload = extract_payload(resp);
+        assert_eq!(payload["backend"], "auto");
+        assert_eq!(payload["backend_effective"], "browser");
+        assert!(payload["queries_run"].is_array());
     }
 
     #[tokio::test]

@@ -518,6 +518,7 @@ def patent_search_natural(
     # Resolve "auto": determine preferred backend but keep "auto" semantics
     # so fallback from browser→serpapi works.
     effective_backend = backend
+    allow_serpapi_fallback = backend == "auto"
     if effective_backend == "auto":
         effective_backend = cfg.search_backend_default
         if effective_backend == "auto":
@@ -532,7 +533,7 @@ def patent_search_natural(
     # Phase 2: Execute queries across backends
     hits_by_query: dict[str, list] = {}
     queries_run: list[dict[str, Any]] = []
-    browser_failed = False
+    browser_backend_error: str | None = None
 
     # Browser backend
     if effective_backend == "browser":
@@ -562,8 +563,10 @@ def patent_search_natural(
                     queries_run.append(
                         {
                             "source": "Google_Patents_Browser",
+                            "backend": "browser",
                             "query": variant.query,
                             "variant_type": variant.variant_type,
+                            "status": "ok" if hits else "empty",
                             "result_count": len(hits),
                         }
                     )
@@ -576,26 +579,44 @@ def patent_search_natural(
                     queries_run.append(
                         {
                             "source": "Google_Patents_Browser",
+                            "backend": "browser",
                             "query": variant.query,
                             "variant_type": variant.variant_type,
+                            "status": "error",
                             "result_count": 0,
                             "error": str(e),
                         }
                     )
         except Exception as e:
             log.warning("Browser backend unavailable: %s", e)
-            browser_failed = True
+            browser_backend_error = str(e)
+            queries_run.append(
+                {
+                    "source": "Google_Patents_Browser",
+                    "backend": "browser",
+                    "query": description,
+                    "variant_type": "backend_init",
+                    "status": "error",
+                    "result_count": 0,
+                    "error": str(e),
+                }
+            )
 
-    # SerpAPI fallback — triggered when backend is "serpapi", or "auto" and browser failed/empty
-    if effective_backend == "serpapi" or (
-        backend == "auto" and (browser_failed or not hits_by_query)
-    ):
+    # SerpAPI fallback — triggered when backend is "serpapi", or "auto" and
+    # the browser backend was unavailable, errored, or returned no hits for a variant.
+    serpapi_needed = effective_backend == "serpapi"
+    if allow_serpapi_fallback and cfg.serpapi_key:
+        serpapi_needed = serpapi_needed or any(
+            not hits_by_query.get(variant.query) for variant in intent.query_variants
+        )
+
+    if serpapi_needed:
         if cfg.serpapi_key:
             from patent_mcp.search.searchers import SerpApiGooglePatentsBackend
 
             serp = SerpApiGooglePatentsBackend(api_key=cfg.serpapi_key)
             for variant in intent.query_variants:
-                if variant.query in hits_by_query and hits_by_query[variant.query]:
+                if backend != "serpapi" and hits_by_query.get(variant.query):
                     continue  # already have results for this query
                 try:
                     hits = _run(
@@ -609,8 +630,10 @@ def patent_search_natural(
                     queries_run.append(
                         {
                             "source": "Google_Patents_SerpAPI",
+                            "backend": "serpapi",
                             "query": variant.query,
                             "variant_type": variant.variant_type,
+                            "status": "ok" if hits else "empty",
                             "result_count": len(hits),
                         }
                     )
@@ -620,10 +643,21 @@ def patent_search_natural(
                         variant.variant_type,
                         e,
                     )
+                    queries_run.append(
+                        {
+                            "source": "Google_Patents_SerpAPI",
+                            "backend": "serpapi",
+                            "query": variant.query,
+                            "variant_type": variant.variant_type,
+                            "status": "error",
+                            "result_count": 0,
+                            "error": str(e),
+                        }
+                    )
         else:
             if not hits_by_query:
                 log.warning(
-                    "No search backends available (browser failed, no SerpAPI key)"
+                    "No search backends available (browser failed or empty, no SerpAPI key)"
                 )
 
     # Phase 3: Rank
@@ -642,13 +676,15 @@ def patent_search_natural(
 
     # Phase 5: Save to session
     all_hits = [s.hit for s in scored]
-    if session_id and all_hits:
+    if session_id and queries_run:
         _save_to_session(
             session_id,
             queries_run,
             all_hits,
             metadata={
                 "search_mode": backend,
+                "effective_backend": effective_backend,
+                "browser_backend_error": browser_backend_error,
                 "planner_concepts": intent.concepts,
                 "planner_synonyms": {k: v for k, v in intent.synonyms.items()},
                 "query_variants": [v.query for v in intent.query_variants],
@@ -1210,9 +1246,20 @@ def _save_to_session(
     try:
         session = sm.load_session(session_id)
         query_num = len(session.queries) + 1
+        target_index = next(
+            (
+                i
+                for i, q in enumerate(queries_run)
+                if q.get("status") == "ok" and q.get("result_count", 0) > 0
+            ),
+            0,
+        )
         for i, q in enumerate(queries_run):
-            # Assign results to first query; others get empty (they're the same results, deduped)
-            q_hits = hits if i == 0 else []
+            # Attach the deduped result set to the first successful attempt when possible.
+            q_hits = hits if i == target_index else []
+            record_metadata = dict(q)
+            if i == target_index and metadata:
+                record_metadata["search_context"] = metadata
             record = QueryRecord(
                 query_id=f"q{query_num + i:03d}",
                 timestamp=now_iso(),
@@ -1220,7 +1267,7 @@ def _save_to_session(
                 query_text=q.get("query", q.get("code", "")),
                 result_count=q.get("result_count", len(q_hits)),
                 results=q_hits,
-                metadata=metadata if i == 0 else None,
+                metadata=record_metadata,
             )
             sm.append_query_result(session_id, record)
     except Exception as e:

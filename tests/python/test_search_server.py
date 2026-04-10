@@ -255,6 +255,55 @@ class TestPatentSearchNatural:
 
         assert result["total_found"] == 1  # deduplicated
 
+    def test_browser_empty_results_fall_back_to_serpapi(self, tmp_path):
+        from patent_mcp.search import server, searchers
+        from patent_mcp.config import PatentConfig
+
+        cfg = PatentConfig(serpapi_key="test-key-123", search_backend_default="browser")
+        mock_hit = searchers.PatentHit(
+            patent_id="US10000009B2",
+            title="Fallback Patent",
+            source="Google_Patents",
+        )
+
+        def fake_browser_search(**kwargs):
+            return []
+
+        async def fake_serpapi_search(**kwargs):
+            return [mock_hit]
+
+        with patch.object(server, "_get_config", return_value=cfg), \
+             patch("patent_mcp.search.google_browser_backend.GooglePatentsBrowserBackend") as MockBrowser, \
+             patch("patent_mcp.search.searchers.SerpApiGooglePatentsBackend") as MockBackend:
+            MockBrowser.return_value.search = fake_browser_search
+            MockBackend.return_value.search = fake_serpapi_search
+            result = server.patent_search_natural("wireless charging")
+
+        assert result["total_found"] == 1
+        assert any(q["source"] == "Google_Patents_SerpAPI" for q in result["queries_run"])
+
+    def test_failed_empty_run_is_saved_to_session(self, tmp_path):
+        from patent_mcp.search import server
+        from patent_mcp.config import PatentConfig
+
+        cfg = PatentConfig(serpapi_key=None, search_backend_default="browser")
+        sm = _make_session_manager(tmp_path)
+        session = sm.create_session("failed search")
+
+        def fake_browser_search(**kwargs):
+            raise RuntimeError("429 Too Many Requests")
+
+        with patch.object(server, "_get_config", return_value=cfg), \
+             patch.object(server, "_get_session_manager", return_value=sm), \
+             patch("patent_mcp.search.google_browser_backend.GooglePatentsBrowserBackend") as MockBrowser:
+            MockBrowser.return_value.search = fake_browser_search
+            result = server.patent_search_natural("wireless charging", session_id=session.session_id)
+
+        assert result["total_found"] == 0
+        loaded = sm.load_session(session.session_id)
+        assert len(loaded.queries) >= 1
+        assert any(q.metadata and q.metadata.get("error") for q in loaded.queries)
+
 
 class TestPatentSuggestQueries:
     def test_returns_strategy_dict(self):

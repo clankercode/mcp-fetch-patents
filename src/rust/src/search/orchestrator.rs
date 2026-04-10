@@ -41,6 +41,77 @@ pub struct SearchResult {
     pub queries_run: Vec<Value>,
     pub enriched_ids: Vec<String>,
     pub elapsed_ms: f64,
+    pub backend_requested: String,
+    pub backend_effective: String,
+    pub fallback_used: bool,
+}
+
+fn resolve_effective_backend(requested_backend: &str, configured_default: &str) -> String {
+    if requested_backend != "auto" {
+        return requested_backend.to_string();
+    }
+    if configured_default == "auto" {
+        "browser".to_string()
+    } else {
+        configured_default.to_string()
+    }
+}
+
+fn classify_attempt_error(error: &str) -> (&'static str, bool, Option<u16>) {
+    let lower = error.to_ascii_lowercase();
+    let http_status = if lower.contains("429") {
+        Some(429)
+    } else if lower.contains("403") {
+        Some(403)
+    } else {
+        None
+    };
+
+    if http_status.is_some()
+        || lower.contains("rate limited")
+        || lower.contains("rate limit")
+        || lower.contains("unusual traffic")
+        || lower.contains("captcha")
+        || lower.contains("not a robot")
+    {
+        ("rate_limited", true, http_status)
+    } else if lower.contains("unavailable")
+        || lower.contains("not installed")
+        || lower.contains("profile lock")
+        || lower.contains("profile busy")
+    {
+        ("unavailable", false, http_status)
+    } else {
+        ("error", false, http_status)
+    }
+}
+
+fn build_query_attempt(
+    source: &str,
+    query: &str,
+    variant_type: &str,
+    status: &str,
+    result_count: usize,
+    error: Option<&str>,
+    http_status: Option<u16>,
+    rate_limited: bool,
+) -> Value {
+    let mut value = serde_json::json!({
+        "source": source,
+        "query": query,
+        "variant_type": variant_type,
+        "status": status,
+        "used": true,
+        "rate_limited": rate_limited,
+        "result_count": result_count,
+    });
+    if let Some(err) = error {
+        value["error"] = serde_json::json!(err);
+    }
+    if let Some(status_code) = http_status {
+        value["http_status"] = serde_json::json!(status_code);
+    }
+    value
 }
 
 impl<'a> SearchOrchestrator<'a> {
@@ -58,13 +129,11 @@ impl<'a> SearchOrchestrator<'a> {
         let mut hits_by_query: HashMap<String, Vec<crate::ranking::PatentHit>> = HashMap::new();
         let mut queries_run: Vec<Value> = Vec::new();
 
-        let effective_backend = if opts.backend == "auto" {
-            self.config.search_backend_default.clone()
-        } else {
-            opts.backend.clone()
-        };
+        let requested_backend = opts.backend.clone();
+        let effective_backend =
+            resolve_effective_backend(&requested_backend, &self.config.search_backend_default);
 
-        if effective_backend == "browser" || effective_backend == "auto" {
+        if effective_backend == "browser" {
             let browser_cfg = &self.backends.browser_config;
             let debug_dir = if opts.debug {
                 browser_cfg
@@ -97,47 +166,61 @@ impl<'a> SearchOrchestrator<'a> {
                 {
                     Ok(hits) if !hits.is_empty() => {
                         let count = hits.len();
-                        queries_run.push(serde_json::json!({
-                            "source": "Google_Patents_Browser",
-                            "query": variant.query,
-                            "variant_type": variant.variant_type,
-                            "result_count": count,
-                        }));
+                        queries_run.push(build_query_attempt(
+                            "Google_Patents_Browser",
+                            &variant.query,
+                            &variant.variant_type,
+                            "success",
+                            count,
+                            None,
+                            None,
+                            false,
+                        ));
                         hits_by_query.insert(variant.query.clone(), hits);
                     }
                     Ok(_) => {
-                        queries_run.push(serde_json::json!({
-                            "source": "Google_Patents_Browser",
-                            "query": variant.query,
-                            "variant_type": variant.variant_type,
-                            "result_count": 0,
-                        }));
+                        queries_run.push(build_query_attempt(
+                            "Google_Patents_Browser",
+                            &variant.query,
+                            &variant.variant_type,
+                            "empty",
+                            0,
+                            None,
+                            None,
+                            false,
+                        ));
                     }
                     Err(e) => {
                         warn!("Browser search failed for '{}': {}", variant.query, e);
-                        queries_run.push(serde_json::json!({
-                            "source": "Google_Patents_Browser",
-                            "query": variant.query,
-                            "variant_type": variant.variant_type,
-                            "result_count": 0,
-                            "error": e.to_string(),
-                        }));
+                        let error_text = e.to_string();
+                        let (status, rate_limited, http_status) =
+                            classify_attempt_error(&error_text);
+                        queries_run.push(build_query_attempt(
+                            "Google_Patents_Browser",
+                            &variant.query,
+                            &variant.variant_type,
+                            status,
+                            0,
+                            Some(&error_text),
+                            http_status,
+                            rate_limited,
+                        ));
                     }
                 }
             }
         }
 
-        let original_backend = opts.backend.as_str();
-        if effective_backend == "serpapi"
-            || (effective_backend == "auto")
-            || (original_backend == "auto" && hits_by_query.is_empty())
-        {
+        let serp_variants: Vec<_> = intent
+            .query_variants
+            .iter()
+            .filter(|v| !hits_by_query.contains_key(&v.query))
+            .collect();
+        let should_try_serpapi = effective_backend == "serpapi"
+            || (requested_backend == "auto" && !serp_variants.is_empty());
+        let mut fallback_used = false;
+        if should_try_serpapi {
             if let Some(ref serp) = self.backends.serpapi {
-                let serp_variants: Vec<_> = intent
-                    .query_variants
-                    .iter()
-                    .filter(|v| !hits_by_query.contains_key(&v.query))
-                    .collect();
+                fallback_used = effective_backend == "browser" && requested_backend == "auto";
                 let serp_futures: Vec<_> = serp_variants
                     .iter()
                     .map(|variant| {
@@ -154,18 +237,39 @@ impl<'a> SearchOrchestrator<'a> {
                     .collect();
                 let serp_results = futures::future::join_all(serp_futures).await;
                 for (variant, result) in serp_variants.iter().zip(serp_results) {
-                    let hits = result.unwrap_or_else(|e| {
-                        warn!("SerpAPI search failed: {}", e);
-                        vec![]
-                    });
-                    let count = hits.len();
-                    queries_run.push(serde_json::json!({
-                        "source": "Google_Patents_SerpAPI",
-                        "query": variant.query,
-                        "variant_type": variant.variant_type,
-                        "result_count": count,
-                    }));
-                    hits_by_query.insert(variant.query.clone(), hits);
+                    match result {
+                        Ok(hits) => {
+                            let count = hits.len();
+                            let status = if count == 0 { "empty" } else { "success" };
+                            queries_run.push(build_query_attempt(
+                                "Google_Patents_SerpAPI",
+                                &variant.query,
+                                &variant.variant_type,
+                                status,
+                                count,
+                                None,
+                                None,
+                                false,
+                            ));
+                            hits_by_query.insert(variant.query.clone(), hits);
+                        }
+                        Err(e) => {
+                            warn!("SerpAPI search failed: {}", e);
+                            let error_text = e.to_string();
+                            let (status, rate_limited, http_status) =
+                                classify_attempt_error(&error_text);
+                            queries_run.push(build_query_attempt(
+                                "Google_Patents_SerpAPI",
+                                &variant.query,
+                                &variant.variant_type,
+                                status,
+                                0,
+                                Some(&error_text),
+                                http_status,
+                                rate_limited,
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -238,6 +342,9 @@ impl<'a> SearchOrchestrator<'a> {
             queries_run,
             enriched_ids,
             elapsed_ms,
+            backend_requested: requested_backend,
+            backend_effective: effective_backend,
+            fallback_used,
         })
     }
 }
@@ -272,6 +379,9 @@ mod tests {
             queries_run: vec![serde_json::json!({"source": "test", "query": "q1"})],
             enriched_ids: vec![],
             elapsed_ms: 42.5,
+            backend_requested: "auto".to_string(),
+            backend_effective: "browser".to_string(),
+            fallback_used: false,
         };
         assert!(result.scored.is_empty());
         assert_eq!(result.queries_run.len(), 1);
@@ -304,13 +414,22 @@ mod tests {
 
     #[test]
     fn effective_backend_auto_resolves() {
-        let backend = "auto";
-        let default_backend = "serpapi";
-        let effective = if backend == "auto" {
-            default_backend
-        } else {
-            backend
-        };
-        assert_eq!(effective, "serpapi");
+        assert_eq!(resolve_effective_backend("auto", "browser"), "browser");
+        assert_eq!(resolve_effective_backend("auto", "auto"), "browser");
+        assert_eq!(resolve_effective_backend("serpapi", "browser"), "serpapi");
+    }
+
+    #[test]
+    fn classify_attempt_error_marks_rate_limits() {
+        let (status, rate_limited, http_status) =
+            classify_attempt_error("SerpAPI Google Patents rate limited: HTTP 429");
+        assert_eq!(status, "rate_limited");
+        assert!(rate_limited);
+        assert_eq!(http_status, Some(429));
+
+        let (status, rate_limited, _) =
+            classify_attempt_error("Google Patents browser unavailable: profile lock failed");
+        assert_eq!(status, "unavailable");
+        assert!(!rate_limited);
     }
 }
