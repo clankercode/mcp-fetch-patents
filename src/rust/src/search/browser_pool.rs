@@ -39,7 +39,7 @@ fn chromium_singleton_target_parts(target: &std::path::Path) -> Option<(String, 
     Some((host.to_string(), pid))
 }
 
-fn remove_stale_chromium_singleton_lock(profile_dir: &std::path::Path) {
+fn remove_stale_chromium_singleton_files(profile_dir: &std::path::Path) {
     let singleton_lock = profile_dir.join("SingletonLock");
     let target = match std::fs::read_link(&singleton_lock) {
         Ok(target) => target,
@@ -49,8 +49,17 @@ fn remove_stale_chromium_singleton_lock(profile_dir: &std::path::Path) {
         return;
     };
     if host == current_hostname() && !pid_alive(pid) {
-        if let Err(e) = std::fs::remove_file(&singleton_lock) {
-            warn!("Failed to remove stale Chromium SingletonLock: {}", e);
+        warn!(
+            "Removing stale Chromium singleton files for profile {:?} (pid={})",
+            profile_dir, pid
+        );
+        for filename in ["SingletonLock", "SingletonSocket", "SingletonCookie"] {
+            let path = profile_dir.join(filename);
+            if let Err(e) = std::fs::remove_file(&path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    warn!("Failed to remove stale Chromium {}: {}", filename, e);
+                }
+            }
         }
     }
 }
@@ -130,7 +139,7 @@ impl BrowserPool {
     async fn launch_browser(&self) -> Result<PoolEntry> {
         let profile_manager = ProfileManager::new(self.profiles_dir.clone());
         let profile_dir = profile_manager.get_profile_dir(&self.profile_name)?;
-        remove_stale_chromium_singleton_lock(&profile_dir);
+        remove_stale_chromium_singleton_files(&profile_dir);
 
         let mut config_builder = BrowserConfig::builder()
             .no_sandbox()
@@ -180,10 +189,18 @@ mod tests {
         let lock_path = profile_dir.join("SingletonLock");
         let target = format!("{}-99999999", current_hostname());
         std::os::unix::fs::symlink(target, &lock_path).unwrap();
+        std::os::unix::fs::symlink(
+            "/tmp/missing/SingletonSocket",
+            profile_dir.join("SingletonSocket"),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink("cookie", profile_dir.join("SingletonCookie")).unwrap();
 
-        remove_stale_chromium_singleton_lock(&profile_dir);
+        remove_stale_chromium_singleton_files(&profile_dir);
 
         assert!(!lock_path.exists());
+        assert!(!profile_dir.join("SingletonSocket").exists());
+        assert!(!profile_dir.join("SingletonCookie").exists());
     }
 
     #[cfg(unix)]
@@ -195,7 +212,7 @@ mod tests {
         let lock_path = profile_dir.join("SingletonLock");
         std::os::unix::fs::symlink("other-host-99999999", &lock_path).unwrap();
 
-        remove_stale_chromium_singleton_lock(&profile_dir);
+        remove_stale_chromium_singleton_files(&profile_dir);
 
         assert!(std::fs::symlink_metadata(&lock_path).is_ok());
     }
