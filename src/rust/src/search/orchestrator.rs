@@ -79,6 +79,8 @@ fn classify_attempt_error(error: &str) -> (&'static str, bool, Option<u16>) {
         || lower.contains("not installed")
         || lower.contains("profile lock")
         || lower.contains("profile busy")
+        || lower.contains("websocket")
+        || lower.contains("connection closed")
     {
         ("unavailable", false, http_status)
     } else {
@@ -429,6 +431,11 @@ mod tests {
 
         let (status, rate_limited, _) =
             classify_attempt_error("Google Patents browser unavailable: profile lock failed");
+        assert_eq!(status, "unavailable");
+        assert!(!rate_limited);
+
+        let (status, rate_limited, _) =
+            classify_attempt_error("Google Patents browser websocket error: connection closed");
         assert_eq!(status, "unavailable");
         assert!(!rate_limited);
     }

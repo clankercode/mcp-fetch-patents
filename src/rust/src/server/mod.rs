@@ -1799,6 +1799,20 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                 "browser_available": browser_available,
                 "converters_available": converters_available,
                 "search_backend_default": ctx.config.search_backend_default,
+                "search": {
+                    "backend_default": ctx.config.search_backend_default,
+                    "serpapi_configured": ctx.config.serpapi_key.is_some(),
+                    "epo_configured": ctx.config.epo_client_id.is_some() && ctx.config.epo_client_secret.is_some(),
+                    "browser": {
+                        "available": browser_available,
+                        "profile_name": ctx.backends.browser_config.profile_name,
+                        "profiles_dir": ctx.backends.browser_config.profiles_dir.as_ref().map(|p| p.to_string_lossy().to_string()),
+                        "headless": ctx.backends.browser_config.headless,
+                        "timeout_ms": ctx.backends.browser_config.timeout_ms,
+                        "max_pages": ctx.backends.browser_config.max_pages,
+                        "debug_html_dir": ctx.backends.browser_config.debug_html_dir.as_ref().map(|p| p.to_string_lossy().to_string()),
+                    },
+                },
                 "sessions": {
                     "directory": ctx.backends.session_manager.dir().to_string_lossy(),
                     "count": ctx.backends.session_manager.list_sessions(None).await.unwrap_or_default().len(),
@@ -2669,6 +2683,27 @@ mod tests {
         assert_eq!(payload["backend"], "auto");
         assert_eq!(payload["backend_effective"], "browser");
         assert!(payload["queries_run"].is_array());
+    }
+
+    #[tokio::test]
+    async fn e2e_patent_status_exposes_search_backend_readiness() {
+        let (config, cache, orchestrator, journal, backends, _sessions_tmp) = make_real_deps();
+        let id = Value::Number(660.into());
+
+        let params = tool_params("patent_status", serde_json::json!({}));
+        let resp = execute_tool_call(
+            id,
+            params,
+            &make_ctx(&config, &cache, &orchestrator, &journal, &backends),
+        )
+        .await;
+        assert!(resp.result.is_some());
+        let payload = extract_payload(resp);
+        assert_eq!(payload["search"]["backend_default"], "browser");
+        assert_eq!(payload["search"]["serpapi_configured"], false);
+        assert_eq!(payload["search"]["browser"]["profile_name"], "default");
+        assert_eq!(payload["search"]["browser"]["headless"], true);
+        assert!(payload["search"]["browser"]["timeout_ms"].is_number());
     }
 
     #[tokio::test]

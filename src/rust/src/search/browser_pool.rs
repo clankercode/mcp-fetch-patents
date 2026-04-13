@@ -58,13 +58,33 @@ impl BrowserPool {
         }
 
         let entry = self.launch_browser().await?;
-        let page = entry
-            .browser
-            .new_page("about:blank")
-            .await
-            .map_err(|e| anyhow!("Failed to create page on fresh browser: {}", e))?;
-        *guard = Some(entry);
-        Ok(page)
+        match entry.browser.new_page("about:blank").await {
+            Ok(page) => {
+                *guard = Some(entry);
+                Ok(page)
+            }
+            Err(first_error) => {
+                warn!(
+                    "Fresh browser failed to create page, relaunching once: {}",
+                    first_error
+                );
+                entry.handler_task.abort();
+                let retry_entry = self.launch_browser().await?;
+                let page = retry_entry
+                    .browser
+                    .new_page("about:blank")
+                    .await
+                    .map_err(|retry_error| {
+                        anyhow!(
+                            "Failed to create page on fresh browser after retry: {}; first error: {}",
+                            retry_error,
+                            first_error
+                        )
+                    })?;
+                *guard = Some(retry_entry);
+                Ok(page)
+            }
+        }
     }
 
     async fn launch_browser(&self) -> Result<PoolEntry> {
