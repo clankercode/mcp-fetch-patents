@@ -15,6 +15,46 @@ struct PoolEntry {
     handler_task: tokio::task::JoinHandle<()>,
 }
 
+fn current_hostname() -> String {
+    hostname::get()
+        .map(|h| h.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| std::env::var("HOSTNAME").unwrap_or_else(|_| "unknown".into()))
+}
+
+fn pid_alive(pid: u32) -> bool {
+    unsafe {
+        let ret = libc::kill(pid as i32, 0);
+        if ret == 0 {
+            return true;
+        }
+        let errno = *libc::__errno_location();
+        errno != libc::ESRCH
+    }
+}
+
+fn chromium_singleton_target_parts(target: &std::path::Path) -> Option<(String, u32)> {
+    let target_name = target.file_name()?.to_string_lossy();
+    let (host, pid) = target_name.rsplit_once('-')?;
+    let pid = pid.parse::<u32>().ok()?;
+    Some((host.to_string(), pid))
+}
+
+fn remove_stale_chromium_singleton_lock(profile_dir: &std::path::Path) {
+    let singleton_lock = profile_dir.join("SingletonLock");
+    let target = match std::fs::read_link(&singleton_lock) {
+        Ok(target) => target,
+        Err(_) => return,
+    };
+    let Some((host, pid)) = chromium_singleton_target_parts(&target) else {
+        return;
+    };
+    if host == current_hostname() && !pid_alive(pid) {
+        if let Err(e) = std::fs::remove_file(&singleton_lock) {
+            warn!("Failed to remove stale Chromium SingletonLock: {}", e);
+        }
+    }
+}
+
 pub struct BrowserPool {
     inner: Arc<Mutex<Option<PoolEntry>>>,
     profiles_dir: Option<PathBuf>,
@@ -90,6 +130,7 @@ impl BrowserPool {
     async fn launch_browser(&self) -> Result<PoolEntry> {
         let profile_manager = ProfileManager::new(self.profiles_dir.clone());
         let profile_dir = profile_manager.get_profile_dir(&self.profile_name)?;
+        remove_stale_chromium_singleton_lock(&profile_dir);
 
         let mut config_builder = BrowserConfig::builder()
             .no_sandbox()
@@ -123,5 +164,39 @@ impl BrowserPool {
             browser,
             handler_task,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn removes_stale_chromium_singleton_lock_for_dead_local_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join("default");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        let lock_path = profile_dir.join("SingletonLock");
+        let target = format!("{}-99999999", current_hostname());
+        std::os::unix::fs::symlink(target, &lock_path).unwrap();
+
+        remove_stale_chromium_singleton_lock(&profile_dir);
+
+        assert!(!lock_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn keeps_chromium_singleton_lock_for_other_host() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_dir = dir.path().join("default");
+        std::fs::create_dir_all(&profile_dir).unwrap();
+        let lock_path = profile_dir.join("SingletonLock");
+        std::os::unix::fs::symlink("other-host-99999999", &lock_path).unwrap();
+
+        remove_stale_chromium_singleton_lock(&profile_dir);
+
+        assert!(std::fs::symlink_metadata(&lock_path).is_ok());
     }
 }
