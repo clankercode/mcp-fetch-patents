@@ -14,7 +14,7 @@ const SOURCE_BROWSER: &str = "Google_Patents_Browser";
 
 pub const BROWSER_USER_AGENT: &str =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
-const STARTUP_BROWSER_PROFILE: &str = "__startup__";
+const STARTUP_BROWSER_PROFILE_PREFIX: &str = "__startup__";
 
 static PATENT_HREF_RE: OnceLock<Regex> = OnceLock::new();
 static PATENT_BODY_RE: OnceLock<Regex> = OnceLock::new();
@@ -70,7 +70,8 @@ pub fn spawn_startup_browser(profiles_dir: Option<PathBuf>, headless: bool) {
 }
 
 async fn startup_browser_task(profiles_dir: Option<PathBuf>, headless: bool) -> Result<()> {
-    let pool = BrowserPool::new(profiles_dir, STARTUP_BROWSER_PROFILE.to_string(), headless);
+    let profile_name = format!("{}-{}", STARTUP_BROWSER_PROFILE_PREFIX, std::process::id());
+    let pool = BrowserPool::new(profiles_dir, profile_name, headless);
     let page = pool.get_page().await?;
     drop(page);
     tracing::info!("Startup browser ready");
