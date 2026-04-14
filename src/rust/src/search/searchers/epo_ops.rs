@@ -7,7 +7,7 @@ use tracing::warn;
 use crate::cache::SessionCache;
 use crate::ranking::PatentHit;
 
-use super::{local_name, validate_path_segment};
+use super::{local_name, validate_classification_code, validate_path_segment};
 
 struct TokenState {
     token: Option<String>,
@@ -217,7 +217,7 @@ impl EpoOpsSearchBackend {
         date_to: Option<&str>,
         max_results: usize,
     ) -> anyhow::Result<Vec<PatentHit>> {
-        validate_path_segment(cpc_code, "classification code")?;
+        validate_classification_code(cpc_code)?;
         let code_expr = if include_subclasses {
             format!("cpc={}/*", cpc_code)
         } else {

@@ -29,6 +29,21 @@ fn validate_path_segment(input: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
+fn validate_classification_code(input: &str) -> Result<()> {
+    if input.contains('\\')
+        || input.contains("..")
+        || input.contains('?')
+        || input.contains('#')
+        || input.chars().any(|c| c.is_whitespace())
+    {
+        return Err(anyhow!(
+            "Invalid classification code '{}' contains forbidden characters",
+            input
+        ));
+    }
+    Ok(())
+}
+
 fn local_name(raw: &[u8]) -> String {
     let name = String::from_utf8_lossy(raw);
     match name.rfind(':') {
@@ -59,5 +74,19 @@ mod tests {
         assert_eq!(local_name(b"ex:country"), "country");
         assert_eq!(local_name(b"country"), "country");
         assert_eq!(local_name(b"ops:world-patent-data"), "world-patent-data");
+    }
+
+    #[test]
+    fn test_classification_code_allows_slash_subgroups() {
+        validate_classification_code("G06Q50/18").unwrap();
+        validate_classification_code("H02J50/10").unwrap();
+    }
+
+    #[test]
+    fn test_classification_code_rejects_unsafe_characters() {
+        assert!(validate_classification_code("G06Q50/18?x=1").is_err());
+        assert!(validate_classification_code("G06Q50\\18").is_err());
+        assert!(validate_classification_code("G06Q50/../18").is_err());
+        assert!(validate_classification_code("G06Q 50/18").is_err());
     }
 }
