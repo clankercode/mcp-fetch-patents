@@ -158,6 +158,50 @@ fn get_str_array_param(params: &serde_json::Value, name: &str) -> Option<Vec<Str
         })
 }
 
+fn backend_error_status(error: &str) -> (&'static str, bool, Option<u16>) {
+    let lower = error.to_lowercase();
+    let http_status = if lower.contains("429") {
+        Some(429)
+    } else if lower.contains("403") {
+        Some(403)
+    } else {
+        None
+    };
+    let rate_limited = matches!(http_status, Some(403 | 429))
+        || lower.contains("rate limited")
+        || lower.contains("too many requests");
+    let status = if rate_limited {
+        "rate_limited"
+    } else {
+        "error"
+    };
+    (status, rate_limited, http_status)
+}
+
+fn backend_attempt_value(source: &str, query: &str, result_count: usize) -> Value {
+    serde_json::json!({
+        "source": source,
+        "query": query,
+        "status": "success",
+        "rate_limited": false,
+        "http_status": Value::Null,
+        "result_count": result_count,
+    })
+}
+
+fn backend_error_attempt_value(source: &str, query: &str, error: &str) -> Value {
+    let (status, rate_limited, http_status) = backend_error_status(error);
+    serde_json::json!({
+        "source": source,
+        "query": query,
+        "status": status,
+        "rate_limited": rate_limited,
+        "http_status": http_status,
+        "result_count": 0,
+        "error": error,
+    })
+}
+
 fn tools_list() -> Value {
     TOOLS_LIST
         .get_or_init(|| {
@@ -960,14 +1004,14 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                         .await
                     {
                         Ok(hits) => {
-                            let qr = Some(
-                                serde_json::json!({"source": "USPTO", "query": query, "result_count": hits.len()}),
-                            );
+                            let qr = Some(backend_attempt_value("USPTO", &query, hits.len()));
                             (hits, qr, None)
                         }
                         Err(e) => {
                             warn!("USPTO search failed: {}", e);
-                            (vec![], None, Some(format!("USPTO: {}", e)))
+                            let error = format!("USPTO: {}", e);
+                            let qr = Some(backend_error_attempt_value("USPTO", &query, &error));
+                            (vec![], qr, Some(error))
                         }
                     }
                 },
@@ -987,14 +1031,14 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                         .await
                     {
                         Ok(hits) => {
-                            let qr = Some(
-                                serde_json::json!({"source": "EPO_OPS", "query": query, "result_count": hits.len()}),
-                            );
+                            let qr = Some(backend_attempt_value("EPO_OPS", &query, hits.len()));
                             (hits, qr, None)
                         }
                         Err(e) => {
                             warn!("EPO OPS search failed: {}", e);
-                            (vec![], None, Some(format!("EPO_OPS: {}", e)))
+                            let error = format!("EPO_OPS: {}", e);
+                            let qr = Some(backend_error_attempt_value("EPO_OPS", &query, &error));
+                            (vec![], qr, Some(error))
                         }
                     }
                 },
@@ -1019,14 +1063,19 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                         .await
                     {
                         Ok(hits) => {
-                            let qr = Some(
-                                serde_json::json!({"source": "Google_Patents", "query": query, "result_count": hits.len()}),
-                            );
+                            let qr =
+                                Some(backend_attempt_value("Google_Patents", &query, hits.len()));
                             (hits, qr, None)
                         }
                         Err(e) => {
                             warn!("SerpAPI search failed: {}", e);
-                            (vec![], None, Some(format!("SerpAPI: {}", e)))
+                            let error = format!("SerpAPI: {}", e);
+                            let qr = Some(backend_error_attempt_value(
+                                "Google_Patents",
+                                &query,
+                                &error,
+                            ));
+                            (vec![], qr, Some(error))
                         }
                     }
                 },
@@ -1252,7 +1301,7 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
             let max_results = get_int_param(&params, "max_results").unwrap_or(25) as usize;
 
             let epo = &ctx.backends.epo;
-            let hits = epo
+            let (hits, backend_attempt, backend_error) = match epo
                 .search_by_classification(
                     &code,
                     include_subclasses,
@@ -1261,10 +1310,18 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                     max_results,
                 )
                 .await
-                .unwrap_or_else(|e| {
+            {
+                Ok(hits) => {
+                    let attempt = backend_attempt_value("EPO_OPS", &code, hits.len());
+                    (hits, attempt, None)
+                }
+                Err(e) => {
                     warn!("EPO OPS classification search failed for {}: {}", code, e);
-                    vec![]
-                });
+                    let error = format!("EPO_OPS: {}", e);
+                    let attempt = backend_error_attempt_value("EPO_OPS", &code, &error);
+                    (vec![], attempt, Some(error))
+                }
+            };
 
             if let Some(ref sid) = session_id {
                 if !hits.is_empty() {
@@ -1293,6 +1350,7 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                 "include_subclasses": include_subclasses,
                 "date_from": date_from,
                 "date_to": date_to,
+                "queries_run": [backend_attempt],
                 "total_found": hits.len(),
                 "results": hits.iter().map(|h| serde_json::json!({
                     "patent_id": h.patent_id,
@@ -1302,6 +1360,7 @@ async fn execute_tool_call(id: Value, params: Value, ctx: &AppContext<'_>) -> Rp
                     "inventors": h.inventors,
                     "source": h.source,
                 })).collect::<Vec<_>>(),
+                "backend_errors": backend_error.map(|e| vec![e]).unwrap_or_default(),
             });
 
             RpcResponse::tool_ok(id, &payload)
@@ -2726,6 +2785,9 @@ mod tests {
         assert!(resp.result.is_some());
         let payload = extract_payload(resp);
         assert!(payload["queries_run"].is_array());
+        assert_eq!(payload["queries_run"][0]["source"], "USPTO");
+        assert!(payload["queries_run"][0]["status"].is_string());
+        assert!(payload["queries_run"][0]["result_count"].is_number());
         assert!(payload["results"].is_array());
     }
 
@@ -2878,6 +2940,10 @@ mod tests {
         assert_eq!(payload["include_subclasses"], true);
         assert_eq!(payload["date_from"], "2010-01-01");
         assert_eq!(payload["date_to"], "2020-01-01");
+        assert_eq!(payload["queries_run"][0]["source"], "EPO_OPS");
+        assert!(payload["queries_run"][0]["status"].is_string());
+        assert!(payload["queries_run"][0]["result_count"].is_number());
+        assert!(payload["backend_errors"].is_array());
         assert!(payload["total_found"].is_number());
         assert!(payload["results"].is_array());
     }
