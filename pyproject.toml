@@ -25,7 +25,7 @@ dependencies = [
 [project.optional-dependencies]
 pymupdf4llm = ["pymupdf4llm>=0.0.17"]
 browser = ["playwright>=1.44", "playwright-stealth>=1.0"]
-marker = ["marker-pdf>=0.3"]
+marker = ["marker-pdf>=1.10.2"]
 bigquery = ["google-cloud-bigquery>=3.13", "google-auth>=2.23"]
 dev = [
     "pytest>=8.0",
