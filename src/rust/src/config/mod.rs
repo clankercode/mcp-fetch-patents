@@ -41,6 +41,27 @@ pub struct PatentConfig {
     pub search_browser_debug_html_dir: Option<PathBuf>,
     pub search_backend_default: String,
     pub search_enrich_top_n: usize,
+    // Prefetch settings
+    pub prefetch: PrefetchConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct PrefetchConfig {
+    pub full_text: bool,
+    pub limit: usize,
+    pub max_concurrent: usize,
+    pub hold_time_secs: u64,
+}
+
+impl Default for PrefetchConfig {
+    fn default() -> Self {
+        PrefetchConfig {
+            full_text: false,
+            limit: 5,
+            max_concurrent: 1,
+            hold_time_secs: 5,
+        }
+    }
 }
 
 /// TOML file schema for deserialization.
@@ -51,6 +72,7 @@ struct TomlFile {
     converters: Option<TomlConverters>,
     journal: Option<TomlJournal>,
     search: Option<TomlSearch>,
+    prefetch: Option<TomlPrefetch>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -96,6 +118,14 @@ struct TomlSearch {
 struct TomlConverters {
     pdf_to_markdown_order: Option<Vec<String>>, // matches Python
     disable: Option<Vec<String>>,               // matches Python
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct TomlPrefetch {
+    full_text: Option<bool>,
+    limit: Option<usize>,
+    max_concurrent: Option<usize>,
+    hold_time_seconds: Option<u64>,
 }
 
 /// XDG data home: $XDG_DATA_HOME or ~/.local/share
@@ -222,6 +252,7 @@ pub fn load_config() -> Result<PatentConfig> {
         search_browser_debug_html_dir: None,
         search_backend_default: "browser".into(),
         search_enrich_top_n: 5,
+        prefetch: PrefetchConfig::default(),
     };
 
     // Load TOML file — check CWD first, then home dir (matches Python behavior)
@@ -322,6 +353,20 @@ pub fn load_config() -> Result<PatentConfig> {
                 cfg.converters_disabled = v;
             }
         }
+        if let Some(p) = file.prefetch {
+            if let Some(v) = p.full_text {
+                cfg.prefetch.full_text = v;
+            }
+            if let Some(v) = p.limit {
+                cfg.prefetch.limit = v;
+            }
+            if let Some(v) = p.max_concurrent {
+                cfg.prefetch.max_concurrent = v;
+            }
+            if let Some(v) = p.hold_time_seconds {
+                cfg.prefetch.hold_time_secs = v;
+            }
+        }
     }
 
     // Override with environment variables
@@ -408,6 +453,24 @@ pub fn load_config() -> Result<PatentConfig> {
     if let Ok(v) = std::env::var("PATENT_SEARCH_ENRICH_TOP_N") {
         if let Ok(n) = v.parse::<usize>() {
             cfg.search_enrich_top_n = n;
+        }
+    }
+    if let Ok(v) = std::env::var("PATENT_PREFETCH_FULL_TEXT") {
+        cfg.prefetch.full_text = parse_bool_env(&v);
+    }
+    if let Ok(v) = std::env::var("PATENT_PREFETCH_LIMIT") {
+        if let Ok(n) = v.parse::<usize>() {
+            cfg.prefetch.limit = n;
+        }
+    }
+    if let Ok(v) = std::env::var("PATENT_MAX_CONCURRENT_FETCHES") {
+        if let Ok(n) = v.parse::<usize>() {
+            cfg.prefetch.max_concurrent = n;
+        }
+    }
+    if let Ok(v) = std::env::var("PATENT_FETCH_HOLD_TIME_SECS") {
+        if let Ok(n) = v.parse::<u64>() {
+            cfg.prefetch.hold_time_secs = n;
         }
     }
 
@@ -497,6 +560,7 @@ mod tests {
             search_browser_debug_html_dir: None,
             search_backend_default: "browser".into(),
             search_enrich_top_n: 5,
+            prefetch: PrefetchConfig::default(),
         };
         assert_eq!(
             cfg.cache_local_dir,
@@ -510,6 +574,10 @@ mod tests {
         assert_eq!(cfg.search_backend_default, "browser");
         assert_eq!(cfg.search_enrich_top_n, 5);
         assert_eq!(cfg.search_browser_idle_timeout, 1800.0);
+        assert!(!cfg.prefetch.full_text);
+        assert_eq!(cfg.prefetch.limit, 5);
+        assert_eq!(cfg.prefetch.max_concurrent, 1);
+        assert_eq!(cfg.prefetch.hold_time_secs, 5);
     }
 
     #[test]

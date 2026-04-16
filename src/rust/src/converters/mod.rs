@@ -586,6 +586,7 @@ mod tests {
             search_browser_debug_html_dir: None,
             search_backend_default: "browser".into(),
             search_enrich_top_n: 5,
+            prefetch: crate::config::PrefetchConfig::default(),
         };
         let tools = check_available_tools(&config);
         for name in &config.converters_order {

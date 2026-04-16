@@ -1,15 +1,19 @@
 use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tracing::warn;
 
 use crate::config::PatentConfig;
+use crate::id_canon::CanonicalPatentId;
+use crate::prefetch::PrefetchQueue;
 use crate::ranking::{ScoredHit, SearchIntent};
 
 pub struct SearchOrchestrator<'a> {
     pub config: &'a PatentConfig,
     pub backends: &'a super::SearchBackends,
     pub fetch_orchestrator: &'a crate::fetchers::FetcherOrchestrator,
+    pub prefetch_queue: Option<Arc<PrefetchQueue>>,
 }
 
 impl<'a> SearchOrchestrator<'a> {
@@ -18,10 +22,16 @@ impl<'a> SearchOrchestrator<'a> {
         backends: &'a super::SearchBackends,
         fetch_orchestrator: &'a crate::fetchers::FetcherOrchestrator,
     ) -> Self {
+        let prefetch_queue = if config.prefetch.full_text {
+            Some(PrefetchQueue::new(&config.prefetch))
+        } else {
+            None
+        };
         Self {
             config,
             backends,
             fetch_orchestrator,
+            prefetch_queue,
         }
     }
 }
@@ -337,6 +347,31 @@ impl<'a> SearchOrchestrator<'a> {
         }
 
         let elapsed_ms = crate::elapsed_ms(start);
+
+        if let Some(ref pq) = self.prefetch_queue {
+            let top_ids: Vec<CanonicalPatentId> = scored
+                .iter()
+                .take(self.config.prefetch.limit)
+                .filter_map(|s| {
+                    let cid = crate::id_canon::canonicalize(&s.hit.patent_id);
+                    if cid.canonical.is_empty() {
+                        None
+                    } else {
+                        Some(cid)
+                    }
+                })
+                .collect();
+            if !top_ids.is_empty() {
+                pq.enqueue(top_ids.clone());
+                let pq = Arc::clone(pq);
+                let cache = self.fetch_orchestrator.cache().clone();
+                let fetcher = self.fetch_orchestrator.clone();
+                let output_base = self.config.cache_local_dir.clone();
+                tokio::spawn(async move {
+                    pq.drain(&cache, &fetcher, &output_base).await;
+                });
+            }
+        }
 
         Ok(SearchResult {
             scored,

@@ -66,6 +66,46 @@ pub struct CacheEntry {
     pub cache_dir: PathBuf,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "status", content = "reason")]
+pub enum FullTextStatus {
+    NotFetched,
+    Pending,
+    Fetched,
+    Failed(String),
+}
+
+impl Default for FullTextStatus {
+    fn default() -> Self {
+        FullTextStatus::NotFetched
+    }
+}
+
+impl std::fmt::Display for FullTextStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FullTextStatus::NotFetched => write!(f, "not_fetched"),
+            FullTextStatus::Pending => write!(f, "pending"),
+            FullTextStatus::Fetched => write!(f, "fetched"),
+            FullTextStatus::Failed(reason) => write!(f, "failed:{}", reason),
+        }
+    }
+}
+
+impl From<&str> for FullTextStatus {
+    fn from(s: &str) -> Self {
+        if s.starts_with("failed:") {
+            FullTextStatus::Failed(s.strip_prefix("failed:").unwrap_or("").to_string())
+        } else {
+            match s {
+                "pending" => FullTextStatus::Pending,
+                "fetched" => FullTextStatus::Fetched,
+                _ => FullTextStatus::NotFetched,
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SQLite schema
 // ---------------------------------------------------------------------------
@@ -89,7 +129,8 @@ CREATE TABLE IF NOT EXISTS patents (
     fetched_at       TEXT NOT NULL,
     legal_status     TEXT,
     status_fetched_at TEXT,
-    cache_dir        TEXT NOT NULL
+    cache_dir        TEXT NOT NULL,
+    full_text_status TEXT DEFAULT 'not_fetched'
 );
 
 CREATE TABLE IF NOT EXISTS patent_locations (
@@ -237,6 +278,18 @@ impl PatentCache {
         }
         let conn = Connection::open(db_path)?;
         conn.execute_batch(SCHEMA_SQL)?;
+        if let Ok(mut stmt) = conn.prepare("PRAGMA table_info(patents)") {
+            let cols: Vec<String> = stmt
+                .query_map([], |row| row.get::<_, String>(1))?
+                .filter_map(|r| r.ok())
+                .collect();
+            if !cols.contains(&"full_text_status".to_string()) {
+                conn.execute(
+                    "ALTER TABLE patents ADD COLUMN full_text_status TEXT DEFAULT 'not_fetched'",
+                    [],
+                )?;
+            }
+        }
         Ok(())
     }
 
@@ -563,6 +616,41 @@ impl PatentCache {
             .collect::<rusqlite::Result<_>>()?;
         Ok(entries)
     }
+
+    pub fn get_full_text_status(&self, canonical_id: &str) -> Result<FullTextStatus> {
+        let conn = self.connect()?;
+        let status: String = conn
+            .query_row(
+                "SELECT full_text_status FROM patents WHERE canonical_id = ?1",
+                params![canonical_id],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "not_fetched".to_string());
+        Ok(FullTextStatus::from(status.as_str()))
+    }
+
+    pub fn set_full_text_status(&self, canonical_id: &str, status: FullTextStatus) -> Result<()> {
+        let conn = self.connect()?;
+        let status_str = status.to_string();
+        let affected = conn.execute(
+            "UPDATE patents SET full_text_status = ?1 WHERE canonical_id = ?2",
+            params![status_str, canonical_id],
+        )?;
+        if affected == 0 {
+            let dest_dir = self.patent_dir(canonical_id);
+            std::fs::create_dir_all(&dest_dir)?;
+            let parts: Vec<&str> = canonical_id.splitn(2, '-').collect();
+            let jurisdiction = parts.first().unwrap_or(&"US");
+            let doc_type = "patent";
+            let now = Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO patents (canonical_id, jurisdiction, doc_type, fetched_at, cache_dir, full_text_status)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![canonical_id, jurisdiction, doc_type, now, dest_dir.to_string_lossy().as_ref(), status_str],
+            )?;
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -601,6 +689,7 @@ mod tests {
             search_browser_debug_html_dir: None,
             search_backend_default: "browser".into(),
             search_enrich_top_n: 5,
+            prefetch: crate::config::PrefetchConfig::default(),
         }
     }
 

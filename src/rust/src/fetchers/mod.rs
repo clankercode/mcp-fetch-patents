@@ -116,7 +116,7 @@ pub struct OrchestratorResult {
 pub struct FetcherOrchestrator {
     config: PatentConfig,
     cache: Arc<PatentCache>,
-    sources: Vec<Box<dyn PatentSource>>,
+    sources: Arc<Vec<Box<dyn PatentSource>>>,
     client: Arc<Client>,
     session_cache: Arc<SessionCache>,
     converter_pipeline: ConverterPipeline,
@@ -152,11 +152,15 @@ impl FetcherOrchestrator {
         self.session_cache.clone()
     }
 
+    pub fn cache(&self) -> Arc<PatentCache> {
+        self.cache.clone()
+    }
+
     fn build_sources(
         config: &PatentConfig,
         session_cache: Arc<SessionCache>,
         client: Arc<Client>,
-    ) -> Vec<Box<dyn PatentSource>> {
+    ) -> Arc<Vec<Box<dyn PatentSource>>> {
         use crate::fetchers::browser::BrowserSource;
         use crate::fetchers::http::*;
 
@@ -225,7 +229,7 @@ impl FetcherOrchestrator {
             ordered.push(source);
         }
 
-        ordered
+        Arc::new(ordered)
     }
 
     /// Get sources that support a patent's jurisdiction, in priority order.
@@ -235,6 +239,13 @@ impl FetcherOrchestrator {
             .filter(|s| s.can_fetch(patent))
             .map(|s| s.as_ref())
             .collect()
+    }
+
+    pub fn primary_source_for(&self, patent: &CanonicalPatentId) -> String {
+        self.get_sources_for(patent)
+            .first()
+            .map(|s| s.source_name().to_string())
+            .unwrap_or_else(|| "unknown".to_string())
     }
 
     /// Fetch a single patent, using cache if available.
@@ -459,6 +470,19 @@ impl FetcherOrchestrator {
     }
 }
 
+impl Clone for FetcherOrchestrator {
+    fn clone(&self) -> Self {
+        FetcherOrchestrator {
+            config: self.config.clone(),
+            cache: self.cache.clone(),
+            sources: self.sources.clone(),
+            client: self.client.clone(),
+            session_cache: self.session_cache.clone(),
+            converter_pipeline: self.converter_pipeline.clone(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -530,6 +554,7 @@ mod tests {
             search_browser_debug_html_dir: None,
             search_backend_default: "browser".into(),
             search_enrich_top_n: 5,
+            prefetch: crate::config::PrefetchConfig::default(),
         }
     }
 
@@ -735,7 +760,7 @@ mod tests {
             config: cfg,
             cache: Arc::new(cache),
             client: Arc::new(Client::new()),
-            sources: vec![
+            sources: Arc::new(vec![
                 Box::new(StubSource {
                     name: "sparse",
                     jurisdictions: &["US"],
@@ -746,7 +771,7 @@ mod tests {
                     jurisdictions: &["US"],
                     result: rich,
                 }),
-            ],
+            ]),
             session_cache: Arc::new(SessionCache::new()),
             converter_pipeline: ConverterPipeline::new(vec![], vec![]),
         };
@@ -780,7 +805,7 @@ mod tests {
             config: cfg,
             cache: Arc::new(cache),
             client: Arc::new(Client::new()),
-            sources: vec![],
+            sources: Arc::new(vec![]),
             session_cache: Arc::new(SessionCache::new()),
             converter_pipeline: ConverterPipeline::new(vec![], vec![]),
         };

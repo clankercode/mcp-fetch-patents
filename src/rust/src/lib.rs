@@ -6,11 +6,14 @@
 pub mod cache;
 pub mod config;
 pub mod converters;
+pub mod cooldown;
 pub mod fetchers;
 pub mod id_canon;
 pub mod journal;
 pub mod planner;
+pub mod prefetch;
 pub mod ranking;
+pub mod rate_limit;
 pub mod search;
 pub mod server;
 
