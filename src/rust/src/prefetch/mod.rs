@@ -109,3 +109,146 @@ impl Clone for PrefetchQueue {
 }
 
 use std::sync::Mutex;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    use crate::cache::{PatentCache, PatentMetadata};
+    use crate::config::PatentConfig;
+    use crate::fetchers::{FetcherOrchestrator, FetchResult, PatentSource};
+    use crate::id_canon::CanonicalPatentId;
+
+    struct PdfSource;
+
+    #[async_trait::async_trait]
+    impl PatentSource for PdfSource {
+        fn source_name(&self) -> &str {
+            "StubPDF"
+        }
+        fn supported_jurisdictions(&self) -> &[&str] {
+            &[]
+        }
+        async fn fetch(
+            &self,
+            patent: &CanonicalPatentId,
+            output_dir: &std::path::Path,
+            _config: &crate::config::PatentConfig,
+        ) -> FetchResult {
+            let pdf_path = output_dir.join(format!("{}.pdf", patent.canonical));
+            std::fs::create_dir_all(output_dir).unwrap();
+            std::fs::write(&pdf_path, b"%PDF-1.4 test").unwrap();
+            FetchResult {
+                source_attempt: crate::cache::SourceAttempt {
+                    source: "StubPDF".into(),
+                    success: true,
+                    elapsed_ms: 1.0,
+                    error: None,
+                    metadata: None,
+                },
+                pdf_path: Some(pdf_path),
+                txt_path: None,
+                metadata: Some(PatentMetadata {
+                    canonical_id: patent.canonical.clone(),
+                    jurisdiction: patent.jurisdiction.clone(),
+                    doc_type: "patent".into(),
+                    title: Some("Test".into()),
+                    abstract_text: None,
+                    inventors: vec![],
+                    assignee: None,
+                    filing_date: None,
+                    publication_date: None,
+                    grant_date: None,
+                    fetched_at: chrono::Utc::now().to_rfc3339(),
+                    legal_status: None,
+                }),
+            }
+        }
+    }
+
+    fn make_test_config(tmp: &TempDir) -> PatentConfig {
+        PatentConfig {
+            cache_local_dir: tmp.path().join("cache").join("patents"),
+            cache_global_db: tmp.path().join("global").join("index.db"),
+            source_priority: vec!["StubPDF".into()],
+            concurrency: 5,
+            fetch_all_sources: false,
+            timeout_secs: 30.0,
+            converters_order: vec![],
+            converters_disabled: vec!["marker".into()],
+            source_base_urls: std::collections::HashMap::new(),
+            epo_client_id: None,
+            epo_client_secret: None,
+            lens_api_key: None,
+            serpapi_key: None,
+            bing_key: None,
+            bigquery_project: None,
+            activity_journal: None,
+            search_browser_profiles_dir: None,
+            search_browser_default_profile: "default".into(),
+            search_browser_headless: true,
+            search_browser_timeout: 60.0,
+            search_browser_max_pages: 3,
+            search_browser_idle_timeout: 1800.0,
+            search_browser_debug_html_dir: None,
+            search_backend_default: "browser".into(),
+            search_enrich_top_n: 5,
+            prefetch: crate::config::PrefetchConfig::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn prefetch_downloads_pdf_and_updates_status() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = make_test_config(&tmp);
+        let cache = std::sync::Arc::new(PatentCache::new(&cfg).unwrap());
+
+        let fetcher = FetcherOrchestrator::with_sources(
+            cfg.clone(),
+            cache.clone(),
+            vec![Box::new(PdfSource)],
+        );
+
+        let queue = PrefetchQueue::new(
+            &crate::config::PrefetchConfig {
+                full_text: true,
+                limit: 2,
+                max_concurrent: 1,
+                hold_time_secs: 1,
+            },
+        );
+
+        let patent = CanonicalPatentId {
+            raw: "US1234567".into(),
+            canonical: "US1234567".into(),
+            jurisdiction: "US".into(),
+            number: "1234567".into(),
+            kind_code: None,
+            doc_type: "patent".into(),
+            filing_year: None,
+            errors: vec![],
+        };
+
+        let pdf_path = cfg.cache_local_dir.join("US1234567").join("US1234567.pdf");
+        println!("[smoke] Cache dir before drain: {}", cfg.cache_local_dir.display());
+        println!("[smoke] PDF expected at: {}", pdf_path.display());
+        println!("[smoke] DB status before: {:?}", cache.get_full_text_status("US1234567"));
+
+        queue.enqueue(vec![patent.clone()]);
+        queue.drain(
+            &cache, &fetcher, &cfg.cache_local_dir).await;
+
+        println!("[smoke] PDF exists after drain: {}", pdf_path.exists());
+        if pdf_path.exists() {
+            let meta = std::fs::metadata(&pdf_path).unwrap();
+            println!("[smoke] PDF size: {} bytes", meta.len());
+        }
+        println!("[smoke] DB status after: {:?}", cache.get_full_text_status("US1234567"));
+
+        assert!(pdf_path.exists(), "PDF should have been prefetched");
+
+        let status = cache.get_full_text_status("US1234567").unwrap();
+        assert_eq!(status, crate::cache::FullTextStatus::Fetched);
+    }
+}

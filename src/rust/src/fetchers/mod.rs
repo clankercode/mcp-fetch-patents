@@ -156,6 +156,33 @@ impl FetcherOrchestrator {
         self.cache.clone()
     }
 
+    #[cfg(test)]
+    pub fn with_sources(
+        config: PatentConfig,
+        cache: Arc<PatentCache>,
+        sources: Vec<Box<dyn PatentSource>>,
+    ) -> Self {
+        let session_cache = Arc::new(SessionCache::new());
+        let client = Arc::new(
+            Client::builder()
+                .timeout(Duration::from_secs(config.timeout_secs as u64))
+                .redirect(reqwest::redirect::Policy::limited(10))
+                .user_agent(DEFAULT_USER_AGENT)
+                .build()
+                .unwrap_or_else(|_| Client::new()),
+        );
+        let converter_pipeline =
+            ConverterPipeline::new(config.converters_order.clone(), config.converters_disabled.clone());
+        FetcherOrchestrator {
+            config,
+            cache,
+            sources: Arc::new(sources),
+            client,
+            session_cache,
+            converter_pipeline,
+        }
+    }
+
     fn build_sources(
         config: &PatentConfig,
         session_cache: Arc<SessionCache>,
